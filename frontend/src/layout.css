@@ -1,0 +1,42 @@
+/* Keep the marketing headline readable instead of forcing one word per line. */
+@media (min-width: 801px) {
+  .auth-shell {
+    grid-template-columns: minmax(0, 1.55fr) minmax(420px, .85fr);
+    max-width: 1440px;
+  }
+
+  .brand-panel {
+    padding: clamp(5rem, 10vw, 9rem) clamp(2.5rem, 6vw, 6rem) 4rem;
+  }
+
+  .brand-panel h1 {
+    font-size: clamp(3.2rem, 5.4vw, 5.75rem);
+    max-width: 700px;
+  }
+}
+
+.inline-fields { display: flex; gap: .5rem; }
+.inline-fields input { flex: 1; }
+.add { display: block; }
+.add > div:first-child { max-width: 46rem; }
+.add form { display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: 1rem; max-width: 52rem; margin-top: 1.5rem; }
+.add form > button { justify-self: start; min-width: 11rem; }
+.store-list { display: grid; gap: .45rem; max-height: 18rem; overflow: auto; padding: .65rem; border: 1px solid #304766; border-radius: 8px; background: #0a1424; }
+.store-list label { display: flex !important; align-items: center; justify-content: flex-start !important; width: 100%; gap: .8rem; padding: .75rem .85rem; border: 1px solid #253d5d; border-radius: 7px; color: #d6e2f3; font-size: .86rem; text-align: left; cursor: pointer; }
+.store-list label:hover { border-color: #6b8ec4; background: #12213a; }
+.store-list label:has(input:checked) { border-color: #bcf16d; background: #1d3022; }
+.store-list label span { flex: 1; min-width: 0; text-align: left; }
+.store-list label strong { color: #f1f6ff; }
+.store-list input[type="checkbox"] { appearance: none; flex: 0 0 1.1rem; width: 1.1rem; height: 1.1rem; margin: 0; padding: 0; border: 1px solid #6686b5; border-radius: 4px; background: #0a1424; accent-color: #bcf16d; }
+.store-list input[type="checkbox"]:checked { border-color: #bcf16d; background: #bcf16d; box-shadow: inset 0 0 0 3px #1d3022; }
+.field-label { display: grid; gap: .4rem; color: #b7c8e1; font-size: .82rem; }
+.fulfillment { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .6rem; margin: 0; padding: 0; border: 0; }
+.fulfillment legend { color: #b7c8e1; font-size: .82rem; margin-bottom: .2rem; }
+.fulfillment label { display: flex; align-items: flex-start; gap: .65rem; min-width: 0; padding: .85rem; border: 1px solid #304766; border-radius: 8px; color: #cad9ed; }
+.fulfillment label.chosen { border-color: #bcf16d; background: #1d3022; }
+.fulfillment input { accent-color: #bcf16d; margin-top: .25rem; }
+.fulfillment span { display: grid; gap: .12rem; }
+.fulfillment small { color: #91a9c9; }
+.postal-setup { display: grid; grid-template-columns: minmax(12rem, 18rem) auto; gap: .5rem; align-items: end; }
+.postal-setup .fine { grid-column: 1 / -1; margin: 0; }
+@media (max-width: 700px) { .fulfillment { grid-template-columns: 1fr; } .postal-setup { grid-template-columns: 1fr; } .add form > button { width: 100%; } }

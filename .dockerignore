@@ -1,0 +1,8 @@
+.git
+.kilo
+.env
+__pycache__
+*.pyc
+db.sqlite3
+staticfiles
+frontend/node_modules
