@@ -598,6 +598,15 @@ function Dashboard({ user, logout }) {
     });
     load();
   };
+  const removeMonitor = async (id, title) => {
+    if (!window.confirm(`Remove the monitor for ${title}?`)) return;
+    try {
+      await request(`monitors/${id}/`, { method: "DELETE" });
+      setMonitors((current) => current.filter((monitor) => monitor.id !== id));
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
   const updateUser = async (id, action) => {
     await request(`staff-users/${id}/`, {
       method: "PATCH",
@@ -667,16 +676,24 @@ function Dashboard({ user, logout }) {
                       "N"
                     )}
                   </div>
-                  <div className="monitor-body">
-                    <div className="monitor-top">
-                      <Status value={m.product.availability} />
-                      <button
-                        className="link"
-                        onClick={() => updateMonitor(m.id, !m.active)}
-                      >
-                        {m.active ? "Pause" : "Resume"}
-                      </button>
-                    </div>
+                    <div className="monitor-body">
+                      <div className="monitor-top">
+                        <Status value={m.product.availability} />
+                        <div className="monitor-actions">
+                          <button
+                            className="link"
+                            onClick={() => updateMonitor(m.id, !m.active)}
+                          >
+                            {m.active ? "Pause" : "Resume"}
+                          </button>
+                          <button
+                            className="link destructive"
+                            onClick={() => removeMonitor(m.id, m.product.title)}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
                     <h3>{m.product.title}</h3>
                     <p className="price">
                       {m.product.price || "Price unavailable"}
