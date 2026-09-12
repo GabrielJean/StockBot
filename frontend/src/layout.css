@@ -21,6 +21,12 @@
 .add > div:first-child { max-width: 46rem; }
 .add form { display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: 1rem; max-width: 52rem; margin-top: 1.5rem; }
 .add form > button { justify-self: start; min-width: 11rem; }
+.grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); }
+.monitor { grid-template-columns: 104px minmax(0, 1fr); }
+.monitor-body { min-width: 0; padding: 1.2rem 1.1rem; }
+.monitor-top { align-items: flex-start; gap: .5rem; }
+.monitor-top .status { white-space: nowrap; }
+.monitor-actions { flex-wrap: wrap; justify-content: flex-end; }
 .store-list { display: grid; gap: .45rem; max-height: 18rem; overflow: auto; padding: .65rem; border: 1px solid #304766; border-radius: 8px; background: #0a1424; }
 .store-list label { display: flex !important; align-items: center; justify-content: flex-start !important; width: 100%; gap: .8rem; padding: .75rem .85rem; border: 1px solid #253d5d; border-radius: 7px; color: #d6e2f3; font-size: .86rem; text-align: left; cursor: pointer; }
 .store-list label:hover { border-color: #6b8ec4; background: #12213a; }
