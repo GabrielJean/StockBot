@@ -62,9 +62,8 @@ jobs:
             APP_GITHUB_REPOSITORY=${{ github.repository }}
             APP_GITHUB_DEFAULT_BRANCH=main
           tags: |
-            gitea.docker-1.gwebs.ca/gabriel/stockbot:latest
             gitea.docker-1.gwebs.ca/gabriel/stockbot:${{ github.sha }}
-            ${{ env.GHCR_IMAGE_NAME }}:latest
+            ${{ env.GHCR_IMAGE_NAME }}:${{ github.sha }}
 
       - name: Export image digest env
         run: echo "IMAGE_DIGEST=${{ steps.build.outputs.digest }}" >> "$GITHUB_ENV"
