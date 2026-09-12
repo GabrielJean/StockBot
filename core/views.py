@@ -176,6 +176,8 @@ def api_collection(request, resource):
         if not validation or not webhook:
             return error("Choose a current validation and enabled webhook.")
         source = get_adapter_for_url(validation.canonical_url)
+        if not source:
+            return error("This monitor validation has an unsupported product URL.", 422)
         product, _ = Product.objects.update_or_create(canonical_url=validation.canonical_url, defaults={"retailer": source.key, "external_id": validation.external_id, "title": validation.title, "image_url": validation.image_url, "price": validation.price, "availability": validation.availability})
         monitor, created = Monitor.objects.get_or_create(owner=request.user, product=product, defaults={"webhook": webhook, "postal_code": validation.postal_code, "fulfillment": validation.fulfillment, "location_keys": validation.location_keys})
         if not created:

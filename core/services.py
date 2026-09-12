@@ -207,7 +207,7 @@ class AppleCanadaAdapter:
 
     def can_handle_url(self, raw_url):
         parsed = urlparse(raw_url)
-        return parsed.scheme in {"http", "https"} and parsed.netloc.lower() in self.domains and parsed.path.startswith("/ca/shop/")
+        return parsed.scheme in {"http", "https"} and parsed.netloc.lower() in self.domains and parsed.path.rstrip("/") == "/ca/shop"
 
     def validate(self, raw_url, postal_code="", fulfillment="shipping", location_keys=None, external_id=""):
         part = external_id.strip().upper()

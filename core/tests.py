@@ -1,9 +1,10 @@
 from unittest.mock import Mock, patch
+from datetime import timedelta
 
 from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 
-from .models import DiscordWebhook, Monitor, Product, SystemState, User
+from .models import DiscordWebhook, Monitor, Product, SystemState, User, Validation
 from .monitoring import check_monitor
 from .services import AppleCanadaAdapter, AdapterError, BestBuyCanadaAdapter, NintendoCanadaAdapter, ProductSnapshot, decrypt, encrypt
 
@@ -135,6 +136,24 @@ class AccountAndMonitorTests(TestCase):
 
         monitor.refresh_from_db()
         self.assertEqual(monitor.last_available_at, checked_at)
+
+    def test_confirm_apple_monitor_serializes_last_available_time(self):
+        owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        webhook = DiscordWebhook.objects.create(owner=owner, name="Discord", encrypted_url=encrypt("https://discord.com/api/webhooks/1/token"))
+        validation = Validation.objects.create(
+            owner=owner,
+            canonical_url="https://www.apple.com/ca/shop?part=MJR84VC/A",
+            external_id="MJR84VC/A",
+            title="Apple product MJR84VC/A",
+            availability=Product.Availability.UNAVAILABLE,
+            expires_at=timezone.now() + timedelta(minutes=15),
+        )
+
+        self.client.force_login(owner)
+        response = self.client.post(f"/api/v1/confirm-monitor/", data={"validationId": validation.id, "webhookId": webhook.id}, content_type="application/json")
+
+        self.assertEqual(response.status_code, 201)
+        self.assertIsNone(response.json()["monitor"]["lastAvailableAt"])
 
 
 class NintendoAdapterTests(TestCase):
