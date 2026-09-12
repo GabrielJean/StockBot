@@ -11,7 +11,7 @@ from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
-from .models import AppleCatalogItem, DiscordWebhook, Monitor, Product, SystemState, User, Validation
+from .models import DiscordWebhook, Monitor, Product, SystemState, User, Validation
 from .services import AdapterError, encrypt, get_adapter_for_url, masked_url, post_discord
 
 
@@ -107,25 +107,6 @@ def api_collection(request, resource):
         return error("Authentication required.", 401)
     if resource == "stores" and request.method == "GET":
         return result({"stores": [{"key": "nintendo_ca", "name": "Nintendo Canada", "enabled": True, "description": "Shipping availability"}, {"key": "bestbuy_ca", "name": "Best Buy Canada", "enabled": True, "description": "Shipping and selected-store pickup"}, {"key": "apple_ca", "name": "Apple Canada", "enabled": True, "description": "Shipping and selected Apple Store pickup"}, {"key": "walmart_ca", "name": "Walmart Canada", "enabled": False}, {"key": "amazon_ca", "name": "Amazon Canada", "enabled": False}]})
-    if resource == "apple-catalog" and request.method == "GET":
-        items = AppleCatalogItem.objects.filter(active=True).order_by("title", "order_number")[:500]
-        catalogue = []
-        seen_configurations = set()
-        current_models = ("iPhone Duo", "iPhone 18 Pro", "iPhone Air", "iPhone 17", "iPhone 17e", "iPhone 16")
-        for item in items:
-            device = re.sub(r"^Apple\s+", "", item.title).split("(", 1)[0].strip()
-            if not device.startswith(current_models):
-                continue
-            configuration = " · ".join(value for value in item.configuration.split(" · ") if value and value != "Canada")
-            if " · " not in configuration:
-                continue
-            key = (device, configuration)
-            if key in seen_configurations:
-                continue
-            seen_configurations.add(key)
-            label = " · ".join(value for value in [device, configuration, item.order_number] if value)
-            catalogue.append({"orderNumber": item.order_number, "label": label})
-        return result({"items": catalogue})
     if resource in {"bestbuy-stores", "apple-stores"} and request.method == "POST":
         postal_code = re.sub(r"\s+", "", data.get("postalCode", "").upper())
         if not re.fullmatch(r"[ABCEGHJKLMNPRSTVXY]\d[ABCEGHJKLMNPRSTVWXYZ]\d[ABCEGHJKLMNPRSTVWXYZ]\d", postal_code):

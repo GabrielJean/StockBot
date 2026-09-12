@@ -55,5 +55,3 @@ NINTENDO_TIMEOUT_SECONDS = int(os.environ.get("NINTENDO_TIMEOUT_SECONDS", "20"))
 STOCKBOT_USER_AGENT = os.environ.get("STOCKBOT_USER_AGENT", "StockBot/1.0 (+self-hosted inventory monitor)").strip() or "StockBot/1.0 (+self-hosted inventory monitor)"
 WEBHOOK_ENCRYPTION_KEY = os.environ.get("WEBHOOK_ENCRYPTION_KEY", "")
 SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "true").lower() == "true"
-APPLE_CATALOG_IMPORT_ENABLED = os.environ.get("APPLE_CATALOG_IMPORT_ENABLED", "true").lower() == "true"
-APPLE_CATALOG_SOURCE_URL = os.environ.get("APPLE_CATALOG_SOURCE_URL", "https://everymac.com/systems/apple/iphone/index-iphone-specs.html")

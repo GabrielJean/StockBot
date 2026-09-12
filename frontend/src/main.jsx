@@ -48,6 +48,40 @@ const validCanadianPostalCode = (value) =>
   /^[ABCEGHJKLMNPRSTVXY]\d[ABCEGHJKLMNPRSTVWXYZ]\d[ABCEGHJKLMNPRSTVWXYZ]\d$/.test(
     value.replace(/\s/g, ""),
   );
+const APPLE_IPHONE_CONFIGURATIONS = [
+  ["iPhone 18 Pro", "Burgundy", "256 GB", "MJR74VC/A"],
+  ["iPhone 18 Pro", "Burgundy", "512 GB", "MJRD4VC/A"],
+  ["iPhone 18 Pro", "Burgundy", "1 TB", "MJRH4VC/A"],
+  ["iPhone 18 Pro", "Burgundy", "2 TB", "MJRM4VC/A"],
+  ["iPhone 18 Pro", "Glacier", "256 GB", "MJR84VC/A"],
+  ["iPhone 18 Pro", "Glacier", "512 GB", "MJRE4VC/A"],
+  ["iPhone 18 Pro", "Glacier", "1 TB", "MJRJ4VC/A"],
+  ["iPhone 18 Pro", "Glacier", "2 TB", "MJRN4VC/A"],
+  ["iPhone 18 Pro", "Silver", "256 GB", "MJR64VC/A"],
+  ["iPhone 18 Pro", "Silver", "512 GB", "MJRC4VC/A"],
+  ["iPhone 18 Pro", "Silver", "1 TB", "MJRG4VC/A"],
+  ["iPhone 18 Pro", "Silver", "2 TB", "MJRL4VC/A"],
+  ["iPhone 18 Pro", "Black", "256 GB", "MJR54VC/A"],
+  ["iPhone 18 Pro", "Black", "512 GB", "MJR94VC/A"],
+  ["iPhone 18 Pro", "Black", "1 TB", "MJRF4VC/A"],
+  ["iPhone 18 Pro", "Black", "2 TB", "MJRK4VC/A"],
+  ["iPhone 18 Pro Max", "Burgundy", "256 GB", "MJX74VC/A"],
+  ["iPhone 18 Pro Max", "Burgundy", "512 GB", "MJXC4VC/A"],
+  ["iPhone 18 Pro Max", "Burgundy", "1 TB", "MJXG4VC/A"],
+  ["iPhone 18 Pro Max", "Burgundy", "2 TB", "MJXL4VC/A"],
+  ["iPhone 18 Pro Max", "Glacier", "256 GB", "MJX84VC/A"],
+  ["iPhone 18 Pro Max", "Glacier", "512 GB", "MJXD4VC/A"],
+  ["iPhone 18 Pro Max", "Glacier", "1 TB", "MJXH4VC/A"],
+  ["iPhone 18 Pro Max", "Glacier", "2 TB", "MJXM4VC/A"],
+  ["iPhone 18 Pro Max", "Silver", "256 GB", "MJX64VC/A"],
+  ["iPhone 18 Pro Max", "Silver", "512 GB", "MJXA4VC/A"],
+  ["iPhone 18 Pro Max", "Silver", "1 TB", "MJXF4VC/A"],
+  ["iPhone 18 Pro Max", "Silver", "2 TB", "MJXK4VC/A"],
+  ["iPhone 18 Pro Max", "Black", "256 GB", "MJX54VC/A"],
+  ["iPhone 18 Pro Max", "Black", "512 GB", "MJX94VC/A"],
+  ["iPhone 18 Pro Max", "Black", "1 TB", "MJXE4VC/A"],
+  ["iPhone 18 Pro Max", "Black", "2 TB", "MJXJ4VC/A"],
+];
 
 function Auth({ onReady }) {
   const [mode, setMode] = useState("login"),
@@ -61,7 +95,10 @@ function Auth({ onReady }) {
         method: "POST",
         body: JSON.stringify(form),
       });
-      if (mode === "login") onReady(data.user);
+      if (mode === "login") {
+        csrf = data.csrfToken;
+        onReady(data.user);
+      }
       else {
         setMessage(data.message);
         setMode("login");
@@ -148,7 +185,6 @@ function AddMonitor({ webhooks, onCreated }) {
   const [url, setUrl] = useState(""),
     [selectedStore, setSelectedStore] = useState(""),
     [applePartNumber, setApplePartNumber] = useState(""),
-    [appleCatalog, setAppleCatalog] = useState([]),
     [postalCode, setPostalCode] = useState(""),
     [fulfillment, setFulfillment] = useState("shipping"),
     [nearbyStores, setNearbyStores] = useState([]),
@@ -163,12 +199,6 @@ function AddMonitor({ webhooks, onCreated }) {
   const needsPostalCode =
     selectedStore === "bestbuy_ca" || selectedStore === "apple_ca";
   const postalCodeIsValid = validCanadianPostalCode(postalCode);
-  useEffect(() => {
-    if (!isAppleUrl || appleCatalog.length) return;
-    request("apple-catalog/")
-      .then((data) => setAppleCatalog(data.items || []))
-      .catch((error) => setMessage(error.message));
-  }, [isAppleUrl, appleCatalog.length]);
   useEffect(() => {
     const input = document.querySelector(
       'input[aria-label="Canadian postal code"]',
@@ -231,50 +261,6 @@ function AddMonitor({ webhooks, onCreated }) {
     });
     form.insertBefore(label, form.firstChild);
   }, []);
-  useEffect(() => {
-    return;
-    const form = document.querySelector(".add form");
-    const existing = document.getElementById("apple-catalog-select");
-    if (!isAppleUrl) {
-      existing?.closest("label")?.remove();
-      return;
-    }
-    if (existing || !form) return;
-    fetch("/api/v1/apple-catalog/", { credentials: "same-origin" })
-      .then((response) => response.json())
-      .then((data) => {
-        if (
-          !data.items?.length ||
-          document.getElementById("apple-catalog-select")
-        )
-          return;
-        const label = document.createElement("label");
-        label.className = "field-label";
-        label.textContent = "Known Apple Canada configuration";
-        const select = document.createElement("select");
-        select.id = "apple-catalog-select";
-        select.appendChild(
-          new Option("Select a known configuration (optional)", ""),
-        );
-        data.items.forEach((item) =>
-          select.appendChild(
-            new Option(`${item.title} - ${item.orderNumber}`, item.orderNumber),
-          ),
-        );
-        select.addEventListener("change", (event) => {
-          setApplePartNumber(event.target.value);
-          const part = document.getElementById("apple-part-number");
-          if (part) part.value = event.target.value;
-        });
-        label.appendChild(select);
-        form.insertBefore(
-          label,
-          document.getElementById("apple-part-number")?.closest("label") ||
-            form.querySelector("fieldset") ||
-            form.querySelector("button"),
-        );
-      });
-  }, [isAppleUrl]);
   const findStores = async () => {
     setLoading(true);
     setMessage("");
@@ -385,17 +371,19 @@ function AddMonitor({ webhooks, onCreated }) {
         </label>}
         {isAppleUrl && <>
           <label className="field-label">
-            Known iPhone configuration
+            iPhone configuration
             <select
-              value={applePartNumber}
+              value={APPLE_IPHONE_CONFIGURATIONS.some((item) => item[3] === applePartNumber) ? applePartNumber : ""}
               onChange={(e) => {
                 setApplePartNumber(e.target.value);
                 setNearbyStores([]);
                 setLocationKeys([]);
               }}
             >
-              <option value="">Select a known configuration</option>
-              {appleCatalog.map((item) => <option key={item.orderNumber} value={item.orderNumber}>{item.label}</option>)}
+              <option value="">Select a supplied configuration</option>
+              {APPLE_IPHONE_CONFIGURATIONS.map(([model, color, storage, part]) => (
+                <option key={part} value={part}>{`${model} · ${color} · ${storage} · ${part}`}</option>
+              ))}
             </select>
           </label>
           <label className="field-label">

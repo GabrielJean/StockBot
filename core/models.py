@@ -80,15 +80,6 @@ class Product(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
-class AppleCatalogItem(models.Model):
-    order_number = models.CharField(max_length=32, unique=True)
-    title = models.CharField(max_length=255)
-    configuration = models.CharField(max_length=255, blank=True)
-    source_url = models.URLField()
-    imported_at = models.DateTimeField(auto_now=True)
-    active = models.BooleanField(default=True)
-
-
 class Validation(models.Model):
     owner = models.ForeignKey(User, on_delete=models.CASCADE)
     canonical_url = models.URLField()

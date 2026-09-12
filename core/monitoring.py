@@ -1,24 +1,11 @@
 from datetime import timedelta
-import logging
 
 from django.conf import settings
 from django.db import transaction
-from django.core.management import call_command
 from django.utils import timezone
 
 from .models import CheckResult, Monitor, NotificationDelivery, Product, SystemState
 from .services import AdapterError, get_adapter_for_retailer, post_discord
-
-logger = logging.getLogger(__name__)
-
-
-def refresh_apple_catalog():
-    """Refresh permissioned Apple configuration data without interrupting monitor checks."""
-    try:
-        call_command("import_apple_catalog", settings.APPLE_CATALOG_SOURCE_URL, verbosity=0)
-    except Exception:
-        logger.exception("Apple catalogue refresh failed")
-
 
 def check_due_products():
     now = timezone.now()

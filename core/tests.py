@@ -1,19 +1,39 @@
 from unittest.mock import Mock, patch
 
-from django.test import TestCase, override_settings
+from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 
 from .models import DiscordWebhook, Monitor, Product, SystemState, User
 from .services import AppleCanadaAdapter, AdapterError, BestBuyCanadaAdapter, NintendoCanadaAdapter, decrypt, encrypt
-from .monitoring import refresh_apple_catalog
 
 
 @override_settings(WEBHOOK_ENCRYPTION_KEY="HsdQznbn2wz1LikNoUvwzmgskkODlG5pgvAd1uKVXpQ=")
 class AccountAndMonitorTests(TestCase):
-    @patch("core.monitoring.call_command")
-    def test_apple_catalog_refresh_uses_configured_source(self, command):
-        refresh_apple_catalog()
-        command.assert_called_once_with("import_apple_catalog", "https://everymac.com/systems/apple/iphone/index-iphone-specs.html", verbosity=0)
+    def test_login_returns_csrf_token_for_authenticated_mutations(self):
+        client = Client(enforce_csrf_checks=True)
+        initial = client.get("/api/v1/")
+        register = client.post(
+            "/api/v1/register/",
+            data={"email": "admin@example.com", "password": "A-secure-passphrase-123", "displayName": "Admin"},
+            content_type="application/json",
+            headers={"X-CSRFToken": initial.json()["csrfToken"]},
+        )
+        self.assertEqual(register.status_code, 201)
+        session = client.get("/api/v1/")
+        login = client.post(
+            "/api/v1/login/",
+            data={"email": "admin@example.com", "password": "A-secure-passphrase-123"},
+            content_type="application/json",
+            headers={"X-CSRFToken": session.json()["csrfToken"]},
+        )
+        self.assertEqual(login.status_code, 200)
+        webhook = client.post(
+            "/api/v1/webhooks/",
+            data={"name": "Discord", "url": "https://discord.com/api/webhooks/1/token"},
+            content_type="application/json",
+            headers={"X-CSRFToken": login.json()["csrfToken"]},
+        )
+        self.assertEqual(webhook.status_code, 201)
 
     @override_settings(WEBHOOK_ENCRYPTION_KEY="ordinary-deployment-secret")
     def test_webhook_encryption_accepts_regular_secret(self):
