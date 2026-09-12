@@ -42,7 +42,7 @@ def serialize_webhook(item):
 def serialize_monitor(item):
     product = item.product
     status = item.availability if item.availability != "unknown" else product.availability
-    return {"id": item.id, "active": item.active, "webhookId": item.webhook_id, "webhookName": item.webhook.name, "fulfillment": item.fulfillment, "locationKeys": item.location_keys, "product": {"id": product.id, "title": product.title, "url": product.canonical_url, "imageUrl": product.image_url, "price": product.price, "availability": status, "lastCheckedAt": item.last_checked_at or product.last_checked_at, "lastError": item.last_error or product.last_error}}
+    return {"id": item.id, "active": item.active, "webhookId": item.webhook_id, "webhookName": item.webhook.name, "fulfillment": item.fulfillment, "locationKeys": item.location_keys, "lastAvailableAt": item.last_available_at, "product": {"id": product.id, "title": product.title, "url": product.canonical_url, "imageUrl": product.image_url, "price": product.price, "availability": status, "lastCheckedAt": item.last_checked_at or product.last_checked_at, "lastError": item.last_error or product.last_error}}
 
 
 def serialize_staff_monitor(item):

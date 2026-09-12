@@ -4,7 +4,8 @@ from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 
 from .models import DiscordWebhook, Monitor, Product, SystemState, User
-from .services import AppleCanadaAdapter, AdapterError, BestBuyCanadaAdapter, NintendoCanadaAdapter, decrypt, encrypt
+from .monitoring import check_monitor
+from .services import AppleCanadaAdapter, AdapterError, BestBuyCanadaAdapter, NintendoCanadaAdapter, ProductSnapshot, decrypt, encrypt
 
 
 @override_settings(WEBHOOK_ENCRYPTION_KEY="HsdQznbn2wz1LikNoUvwzmgskkODlG5pgvAd1uKVXpQ=")
@@ -120,6 +121,20 @@ class AccountAndMonitorTests(TestCase):
         self.assertFalse(monitor.active)
         self.assertEqual(self.client.delete(f"/api/v1/staff-monitors/{monitor.id}/").status_code, 200)
         self.assertFalse(Monitor.objects.filter(id=monitor.id).exists())
+
+    def test_available_check_records_monitor_availability_time(self):
+        owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        product = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/example", title="Example")
+        webhook = DiscordWebhook.objects.create(owner=owner, name="Discord", encrypted_url=encrypt("https://discord.com/api/webhooks/1/token"))
+        monitor = Monitor.objects.create(owner=owner, product=product, webhook=webhook, armed=False)
+        checked_at = timezone.now()
+        source = Mock()
+        source.check.return_value = ProductSnapshot(product.canonical_url, product.title, availability=Product.Availability.AVAILABLE)
+
+        check_monitor(monitor, product, source, checked_at)
+
+        monitor.refresh_from_db()
+        self.assertEqual(monitor.last_available_at, checked_at)
 
 
 class NintendoAdapterTests(TestCase):

@@ -728,10 +728,12 @@ function Dashboard({ user, logout }) {
                       {m.product.price || "Price unavailable"}
                     </p>
                     <p className="meta">
-                      Discord: {m.webhookName}
-                      <br />
-                      Checked: {formatTime(m.product.lastCheckedAt)}
-                    </p>
+                       Discord: {m.webhookName}
+                       <br />
+                       Checked: {formatTime(m.product.lastCheckedAt)}
+                       <br />
+                       Last available: {formatTime(m.lastAvailableAt)}
+                     </p>
                     {m.product.lastError && (
                       <p className="warning">{m.product.lastError}</p>
                     )}

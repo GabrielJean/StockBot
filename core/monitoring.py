@@ -56,6 +56,8 @@ def check_product(product_id):
         product.save()
         CheckResult.objects.create(product=product, status=status, price=product.price, error=message)
         monitors = list(product.monitors.select_related("webhook").filter(active=True))
+        if status == Product.Availability.AVAILABLE:
+            Monitor.objects.filter(id__in=[monitor.id for monitor in monitors]).update(last_available_at=now)
         if status == Product.Availability.UNAVAILABLE:
             for monitor in monitors:
                 if not monitor.armed:
@@ -87,13 +89,15 @@ def check_monitor(monitor, product, source, now):
         monitor.availability = status
         monitor.last_checked_at = now
         monitor.last_error = message
+        if status == Product.Availability.AVAILABLE:
+            monitor.last_available_at = now
         if status == Product.Availability.UNAVAILABLE:
             monitor.armed = True
         elif status == Product.Availability.AVAILABLE and previous != Product.Availability.AVAILABLE and monitor.armed and monitor.webhook.enabled:
             monitor.armed = False
             delivered, error = post_discord(monitor.webhook, product.title, product.canonical_url, product.price)
             NotificationDelivery.objects.create(monitor=monitor, delivered=delivered, error=error)
-        monitor.save(update_fields=["availability", "last_checked_at", "last_error", "armed"])
+        monitor.save(update_fields=["availability", "last_checked_at", "last_available_at", "last_error", "armed"])
         CheckResult.objects.create(product=product, status=status, price=product.price, error=message)
         if snapshot:
             product.title = snapshot.title

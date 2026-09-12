@@ -106,6 +106,7 @@ class Monitor(models.Model):
     location_keys = models.JSONField(default=list)
     availability = models.CharField(max_length=16, default="unknown")
     last_checked_at = models.DateTimeField(null=True, blank=True)
+    last_available_at = models.DateTimeField(null=True, blank=True)
     last_error = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
