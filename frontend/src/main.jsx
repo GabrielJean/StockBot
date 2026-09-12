@@ -452,7 +452,7 @@ function AddMonitor({ webhooks, onCreated }) {
                       aria-label="Canadian postal code"
                       inputMode="text"
                       autoCapitalize="characters"
-                      placeholder="J9H 3V7"
+                      placeholder="A1A 1A1"
                       value={postalCode}
                       onChange={(e) =>
                         setPostalCode(formatPostalCode(e.target.value))
@@ -469,7 +469,7 @@ function AddMonitor({ webhooks, onCreated }) {
                   </button>
                   {postalCode && !postalCodeIsValid && (
                     <p className="fine">
-                      Enter all six characters, for example J9H 3V7.
+                      Enter all six characters, for example A1A 1A1.
                     </p>
                   )}
                 </div>

@@ -106,7 +106,7 @@ class BestBuyAdapterTests(TestCase):
         response = Mock(status_code=200, json=lambda: {"locations": [{"locationId": "928", "name": "Ottawa West", "city": "Nepean", "region": "ON", "distance": 10.44, "qpu": {"pickupOptions": ["IN_STORE_PICKUP"]}}, {"locationId": "858", "name": "Airport Kiosk", "qpu": {"pickupOptions": []}}]})
         response.raise_for_status = Mock()
         with patch("core.services.requests.get", return_value=response):
-            stores = BestBuyCanadaAdapter().nearby_stores("J9H3V7")
+            stores = BestBuyCanadaAdapter().nearby_stores("A1A1A1")
         self.assertEqual(stores, [{"id": "928", "name": "Ottawa West", "city": "Nepean", "region": "ON", "distance": 10.44, "pickup": True}])
 
     def test_best_buy_shipping_purchasable_is_available(self):
@@ -128,7 +128,7 @@ class BestBuyAdapterTests(TestCase):
         pickup_response = Mock(status_code=200, json=lambda: {"availabilities": [{"pickup": {"locations": [{"locationKey": "928", "hasInventory": True, "isReservable": True}]}}]})
         product = Product(canonical_url="https://www.bestbuy.ca/en-ca/product/nintendo-switch-2-console/19296507", title="Nintendo Switch 2 Console")
         with patch("core.services.requests.get", side_effect=[product_response, pickup_response]) as request_get:
-            snapshot = BestBuyCanadaAdapter().check(product, "J9H3V7", "pickup", ["928"])
+            snapshot = BestBuyCanadaAdapter().check(product, "A1A1A1", "pickup", ["928"])
         self.assertEqual(snapshot.availability, "available")
         self.assertEqual(request_get.call_args_list[1].kwargs["params"]["locations"], "928")
 
@@ -141,17 +141,17 @@ class AppleAdapterTests(TestCase):
         response = Mock(status_code=200, json=lambda: self.pickup_available_response)
         response.raise_for_status = Mock()
         with patch("core.services.requests.get", return_value=response) as request_get:
-            AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "J9H3V7", "pickup", external_id="MG854VC/A")
+            AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "A1A1A1", "pickup", external_id="MG854VC/A")
         self.assertEqual(request_get.call_args.kwargs["headers"]["User-Agent"], "StockBot/1.0 (contact: ops@example.com)")
 
     def test_apple_fulfillment_uses_current_endpoint_and_postal_code(self):
         response = Mock(status_code=200, json=lambda: self.pickup_available_response)
         response.raise_for_status = Mock()
         with patch("core.services.requests.get", return_value=response) as request_get:
-            snapshot = AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "J9H3V7", "pickup", external_id="MG854VC/A")
+            snapshot = AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "A1A1A1", "pickup", external_id="MG854VC/A")
         self.assertEqual(snapshot.availability, "available")
         self.assertEqual(request_get.call_args.args[0], "https://www.apple.com/ca/shop/retail/pickup-message")
-        self.assertEqual(request_get.call_args.kwargs["params"]["location"], "J9H3V7")
+        self.assertEqual(request_get.call_args.kwargs["params"]["location"], "A1A1A1")
         self.assertEqual(request_get.call_args.kwargs["params"]["pl"], "true")
         self.assertEqual(request_get.call_args.kwargs["params"]["parts.0"], "MG854VC/A")
         self.assertNotIn("fae", request_get.call_args.kwargs["params"])
@@ -162,7 +162,7 @@ class AppleAdapterTests(TestCase):
         response = Mock(status_code=200, json=lambda: {"body": {"stores": [{"partsAvailability": {"MG854VC/A": {"pickupDisplay": "unavailable"}}}]}})
         response.raise_for_status = Mock()
         with patch("core.services.requests.get", return_value=response):
-            snapshot = AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "J9H3V7", "pickup", external_id="MG854VC/A")
+            snapshot = AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "A1A1A1", "pickup", external_id="MG854VC/A")
         self.assertEqual(snapshot.availability, "unavailable")
 
     def test_apple_fulfillment_uses_only_selected_store_ids(self):
@@ -179,7 +179,7 @@ class AppleAdapterTests(TestCase):
         )
         response.raise_for_status = Mock()
         with patch("core.services.requests.get", return_value=response):
-            snapshot = AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "J9H3V7", "pickup", ["R002"], "MG854VC/A")
+            snapshot = AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "A1A1A1", "pickup", ["R002"], "MG854VC/A")
         self.assertEqual(snapshot.availability, "unavailable")
 
     def test_apple_nearby_stores_exposes_apple_store_ids(self):
@@ -195,7 +195,7 @@ class AppleAdapterTests(TestCase):
         )
         response.raise_for_status = Mock()
         with patch("core.services.requests.get", return_value=response):
-            stores = AppleCanadaAdapter().nearby_stores("J9H3V7", "MG854VC/A")
+            stores = AppleCanadaAdapter().nearby_stores("A1A1A1", "MG854VC/A")
         self.assertEqual(stores, [{"id": "R001", "name": "Rideau", "city": "Ottawa", "region": "ON", "distance": 2.4, "pickup": True}])
 
     def test_apple_nearby_stores_supports_nested_retail_store_data(self):
@@ -218,7 +218,7 @@ class AppleAdapterTests(TestCase):
         )
         response.raise_for_status = Mock()
         with patch("core.services.requests.get", return_value=response):
-            stores = AppleCanadaAdapter().nearby_stores("J9H3V7", "MG854VC/A")
+            stores = AppleCanadaAdapter().nearby_stores("A1A1A1", "MG854VC/A")
         self.assertEqual(stores, [{"id": "R002", "name": "Bayshore", "city": "Ottawa", "region": "ON", "distance": 3.1, "pickup": True}])
 
     def test_apple_fulfillment_uses_root_parts_availability(self):
@@ -228,7 +228,7 @@ class AppleAdapterTests(TestCase):
         )
         response.raise_for_status = Mock()
         with patch("core.services.requests.get", return_value=response):
-            snapshot = AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "J9H3V7", "pickup", external_id="MG854VC/A")
+            snapshot = AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "A1A1A1", "pickup", external_id="MG854VC/A")
         self.assertEqual(snapshot.availability, "available")
 
     def test_apple_shipping_uses_current_fulfillment_request(self):
@@ -250,7 +250,7 @@ class AppleAdapterTests(TestCase):
         )
         response.raise_for_status = Mock()
         with patch("core.services.requests.get", return_value=response) as request_get:
-            snapshot = AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "J9H3V7", "shipping", external_id="MG854VC/A")
+            snapshot = AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "A1A1A1", "shipping", external_id="MG854VC/A")
         self.assertEqual(snapshot.availability, "available")
         self.assertEqual(request_get.call_args.args[0], "https://www.apple.com/ca/shop/delivery-message")
         self.assertEqual(request_get.call_args.kwargs["params"], {"mt": "regular", "parts.0": "MG854VC/A"})
@@ -272,7 +272,7 @@ class AppleAdapterTests(TestCase):
         delivery_response.raise_for_status = Mock()
         pickup_response.raise_for_status = Mock()
         with patch("core.services.requests.get", side_effect=[pickup_response, delivery_response]) as request_get:
-            snapshot = AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "J9H3V7", "either", external_id="MG854VC/A")
+            snapshot = AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "A1A1A1", "either", external_id="MG854VC/A")
         self.assertEqual(snapshot.availability, "available")
         self.assertEqual(request_get.call_count, 2)
 
@@ -281,7 +281,7 @@ class AppleAdapterTests(TestCase):
         delivery_response = Mock(status_code=541, text="Apple Shield")
         pickup_response.raise_for_status = Mock()
         with patch("core.services.requests.get", side_effect=[pickup_response, delivery_response]) as request_get:
-            snapshot = AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "J9H3V7", "either", external_id="MG854VC/A")
+            snapshot = AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "A1A1A1", "either", external_id="MG854VC/A")
         self.assertEqual(snapshot.availability, "available")
         self.assertEqual(request_get.call_count, 2)
 
@@ -293,5 +293,5 @@ class AppleAdapterTests(TestCase):
         response = Mock(status_code=403, text="Access Denied")
         with patch("core.services.requests.get", return_value=response), self.assertLogs("core.services", level="WARNING") as logs:
             with self.assertRaisesRegex(AdapterError, "HTTP 403"):
-                AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "J9H3V7", external_id="MG854VC/A")
+                AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "A1A1A1", external_id="MG854VC/A")
         self.assertEqual(logs.output, ["WARNING:core.services:Apple delivery request blocked: HTTP 403; raw response: Access Denied"])
