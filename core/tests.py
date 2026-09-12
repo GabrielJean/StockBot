@@ -2,9 +2,10 @@ from unittest.mock import Mock, patch
 from datetime import timedelta
 
 from django.test import Client, TestCase, override_settings
+from django.db import connection
 from django.utils import timezone
 
-from .models import DiscordWebhook, Monitor, Product, SystemState, User, Validation
+from .models import DiscordWebhook, Monitor, NotificationDelivery, Product, SystemState, User, Validation
 from .monitoring import check_monitor
 from .services import AppleCanadaAdapter, AdapterError, BestBuyCanadaAdapter, NintendoCanadaAdapter, ProductSnapshot, decrypt, encrypt
 
@@ -136,6 +137,22 @@ class AccountAndMonitorTests(TestCase):
 
         monitor.refresh_from_db()
         self.assertEqual(monitor.last_available_at, checked_at)
+
+    def test_monitor_delivery_runs_after_transaction_commits(self):
+        owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        product = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/example", title="Example")
+        webhook = DiscordWebhook.objects.create(owner=owner, name="Discord", encrypted_url=encrypt("https://discord.com/api/webhooks/1/token"))
+        monitor = Monitor.objects.create(owner=owner, product=product, webhook=webhook)
+        source = Mock()
+        source.check.return_value = ProductSnapshot(product.canonical_url, product.title, availability=Product.Availability.AVAILABLE)
+        transaction_state = []
+        outer_transaction_state = tuple(connection.savepoint_ids)
+
+        with patch("core.monitoring.post_discord", side_effect=lambda *_: (transaction_state.append(tuple(connection.savepoint_ids)), (True, ""))[1]):
+            check_monitor(monitor, product, source, timezone.now())
+
+        self.assertEqual(transaction_state, [outer_transaction_state])
+        self.assertEqual(NotificationDelivery.objects.filter(monitor=monitor).count(), 1)
 
     def test_confirm_apple_monitor_serializes_last_available_time(self):
         owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)

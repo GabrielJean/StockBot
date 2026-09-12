@@ -41,6 +41,7 @@ def check_product(product_id):
         status = Product.Availability.BLOCKED if "blocked" in message.lower() else Product.Availability.ERROR
         snapshot = None
         success = False
+    deliveries = []
     with transaction.atomic():
         product = Product.objects.select_for_update().get(id=product_id)
         previous = product.availability
@@ -71,8 +72,10 @@ def check_product(product_id):
                 continue
             monitor.armed = False
             monitor.save(update_fields=["armed"])
-            delivered, error = post_discord(monitor.webhook, product.title, product.canonical_url, product.price)
-            NotificationDelivery.objects.create(monitor=monitor, delivered=delivered, error=error)
+            deliveries.append((monitor, monitor.webhook, product.title, product.canonical_url, product.price))
+    for monitor, webhook, title, url, price in deliveries:
+        delivered, error = post_discord(webhook, title, url, price)
+        NotificationDelivery.objects.create(monitor=monitor, delivered=delivered, error=error)
 
 
 def check_monitor(monitor, product, source, now):
@@ -83,6 +86,7 @@ def check_monitor(monitor, product, source, now):
         status = Product.Availability.BLOCKED if "blocked" in str(exc).lower() else Product.Availability.ERROR
         message = str(exc)
         snapshot = None
+    delivery = None
     with transaction.atomic():
         monitor = Monitor.objects.select_for_update().select_related("webhook").get(id=monitor.id)
         previous = monitor.availability
@@ -95,8 +99,7 @@ def check_monitor(monitor, product, source, now):
             monitor.armed = True
         elif status == Product.Availability.AVAILABLE and previous != Product.Availability.AVAILABLE and monitor.armed and monitor.webhook.enabled:
             monitor.armed = False
-            delivered, error = post_discord(monitor.webhook, product.title, product.canonical_url, product.price)
-            NotificationDelivery.objects.create(monitor=monitor, delivered=delivered, error=error)
+            delivery = (monitor, monitor.webhook, product.title, product.canonical_url, product.price)
         monitor.save(update_fields=["availability", "last_checked_at", "last_available_at", "last_error", "armed"])
         CheckResult.objects.create(product=product, status=status, price=product.price, error=message)
         if snapshot:
@@ -106,3 +109,7 @@ def check_monitor(monitor, product, source, now):
             product.last_checked_at = now
             product.last_success_at = now
             product.save(update_fields=["title", "image_url", "price", "last_checked_at", "last_success_at", "updated_at"])
+    if delivery:
+        monitor, webhook, title, url, price = delivery
+        delivered, error = post_discord(webhook, title, url, price)
+        NotificationDelivery.objects.create(monitor=monitor, delivered=delivered, error=error)
