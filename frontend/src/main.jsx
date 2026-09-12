@@ -558,6 +558,7 @@ function Dashboard({ user, logout }) {
     [view, setView] = useState("monitors"),
     [webhookForm, setWebhookForm] = useState({ name: "", url: "" }),
     [users, setUsers] = useState([]),
+    [adminMonitors, setAdminMonitors] = useState([]),
     [message, setMessage] = useState("");
   const load = async () => {
     try {
@@ -572,8 +573,16 @@ function Dashboard({ user, logout }) {
     }
   };
   const loadUsers = async () => {
-    const data = await request("staff-users/");
-    setUsers(data.users);
+    try {
+      const [userData, monitorData] = await Promise.all([
+        request("staff-users/"),
+        request("staff-monitors/"),
+      ]);
+      setUsers(userData.users);
+      setAdminMonitors(monitorData.monitors);
+    } catch (error) {
+      setMessage(error.message);
+    }
   };
   useEffect(() => {
     load();
@@ -613,6 +622,26 @@ function Dashboard({ user, logout }) {
       body: JSON.stringify({ action }),
     });
     loadUsers();
+  };
+  const updateAdminMonitor = async (id, active) => {
+    try {
+      await request(`staff-monitors/${id}/`, {
+        method: "PATCH",
+        body: JSON.stringify({ active }),
+      });
+      loadUsers();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+  const removeAdminMonitor = async (id, title, owner) => {
+    if (!window.confirm(`Remove ${owner}'s monitor for ${title}?`)) return;
+    try {
+      await request(`staff-monitors/${id}/`, { method: "DELETE" });
+      setAdminMonitors((current) => current.filter((monitor) => monitor.id !== id));
+    } catch (error) {
+      setMessage(error.message);
+    }
   };
   return (
     <main className="app-shell">
@@ -785,8 +814,8 @@ function Dashboard({ user, logout }) {
           <>
             <header>
               <p className="eyebrow">ADMIN CONTROL</p>
-              <h1>Account approvals</h1>
-              <p>Review registrations before they can create monitors.</p>
+              <h1>Accounts and monitors</h1>
+              <p>Review registrations and manage active restock signals.</p>
             </header>
             <section className="list">
               {users.map((person) => (
@@ -812,6 +841,32 @@ function Dashboard({ user, logout }) {
                   )}
                 </article>
               ))}
+            </section>
+            <h2 className="section-title">All monitors</h2>
+            <section className="list">
+              {adminMonitors.map((monitor) => (
+                <article key={monitor.id}>
+                  <div>
+                    <strong>{monitor.product.title}</strong>
+                    <p>
+                      {monitor.owner.displayName || monitor.owner.email} · {monitor.owner.email}
+                    </p>
+                    <p>{monitor.active ? "Active" : "Paused"} · {monitor.product.availability}</p>
+                  </div>
+                  <div className="actions">
+                    <button onClick={() => updateAdminMonitor(monitor.id, !monitor.active)}>
+                      {monitor.active ? "Pause" : "Resume"}
+                    </button>
+                    <button
+                      className="danger"
+                      onClick={() => removeAdminMonitor(monitor.id, monitor.product.title, monitor.owner.displayName || monitor.owner.email)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </article>
+              ))}
+              {!adminMonitors.length && <article className="empty">No monitors exist.</article>}
             </section>
           </>
         )}

@@ -101,6 +101,26 @@ class AccountAndMonitorTests(TestCase):
         self.assertFalse(Monitor.objects.filter(id=owner_monitor.id).exists())
         self.assertTrue(Monitor.objects.filter(id=other_monitor.id).exists())
 
+    def test_staff_can_manage_any_monitor(self):
+        admin = User.objects.create_user(email="admin@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True, is_staff=True)
+        owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        product = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/example", title="Example")
+        webhook = DiscordWebhook.objects.create(owner=owner, name="Discord", encrypted_url=encrypt("https://discord.com/api/webhooks/1/token"))
+        monitor = Monitor.objects.create(owner=owner, product=product, webhook=webhook)
+
+        self.client.force_login(owner)
+        self.assertEqual(self.client.get("/api/v1/staff-monitors/").status_code, 403)
+
+        self.client.force_login(admin)
+        response = self.client.get("/api/v1/staff-monitors/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["monitors"][0]["owner"]["email"], owner.email)
+        self.assertEqual(self.client.patch(f"/api/v1/staff-monitors/{monitor.id}/", data={"active": False}, content_type="application/json").status_code, 200)
+        monitor.refresh_from_db()
+        self.assertFalse(monitor.active)
+        self.assertEqual(self.client.delete(f"/api/v1/staff-monitors/{monitor.id}/").status_code, 200)
+        self.assertFalse(Monitor.objects.filter(id=monitor.id).exists())
+
 
 class NintendoAdapterTests(TestCase):
     def fetch_snapshot(self, availability):

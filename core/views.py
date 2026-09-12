@@ -45,6 +45,12 @@ def serialize_monitor(item):
     return {"id": item.id, "active": item.active, "webhookId": item.webhook_id, "webhookName": item.webhook.name, "fulfillment": item.fulfillment, "locationKeys": item.location_keys, "product": {"id": product.id, "title": product.title, "url": product.canonical_url, "imageUrl": product.image_url, "price": product.price, "availability": status, "lastCheckedAt": item.last_checked_at or product.last_checked_at, "lastError": item.last_error or product.last_error}}
 
 
+def serialize_staff_monitor(item):
+    data = serialize_monitor(item)
+    data["owner"] = {"id": item.owner_id, "email": item.owner.email, "displayName": item.owner.display_name}
+    return data
+
+
 @require_http_methods(["GET"])
 def health(request):
     state = SystemState.objects.first()
@@ -185,6 +191,11 @@ def api_collection(request, resource):
         if not request.user.is_staff:
             return error("Staff access required.", 403)
         return result({"users": [{"id": user.id, "email": user.email, "displayName": user.display_name, "status": user.status, "staff": user.is_staff, "joined": user.date_joined} for user in User.objects.order_by("status", "date_joined")]})
+    if resource == "staff-monitors" and request.method == "GET":
+        if not request.user.is_staff:
+            return error("Staff access required.", 403)
+        monitors = Monitor.objects.select_related("owner", "product", "webhook").order_by("owner__email", "-created_at")
+        return result({"monitors": [serialize_staff_monitor(item) for item in monitors]})
     return error("Resource not found.", 404)
 
 
@@ -204,6 +215,19 @@ def api_item(request, resource, object_id):
             item.active = bool(data["active"])
             item.save(update_fields=["active", "updated_at"])
         return result({"monitor": serialize_monitor(item)})
+    if resource == "staff-monitors":
+        if not request.user.is_staff:
+            return error("Staff access required.", 403)
+        item = Monitor.objects.select_related("owner", "product", "webhook").filter(id=object_id).first()
+        if not item:
+            return error("Monitor not found.", 404)
+        if request.method == "DELETE":
+            item.delete()
+            return result({"ok": True})
+        if "active" in data:
+            item.active = bool(data["active"])
+            item.save(update_fields=["active", "updated_at"])
+        return result({"monitor": serialize_staff_monitor(item)})
     if resource == "webhooks":
         item = request.user.webhooks.filter(id=object_id).first()
         if not item:
