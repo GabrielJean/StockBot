@@ -1,4 +1,5 @@
 from datetime import timedelta
+import logging
 
 from django.conf import settings
 from django.db import transaction
@@ -7,12 +8,20 @@ from django.utils import timezone
 from .models import CheckResult, Monitor, NotificationDelivery, Product, SystemState
 from .services import AdapterError, get_adapter_for_retailer, post_discord
 
+
+logger = logging.getLogger(__name__)
+
+
 def check_due_products():
     now = timezone.now()
     SystemState.objects.update_or_create(pk=1, defaults={"scheduler_heartbeat": now})
     products = Product.objects.filter(monitors__active=True).distinct().filter(next_check_at__isnull=True) | Product.objects.filter(monitors__active=True, next_check_at__lte=now).distinct()
     for product in products[:100]:
-        check_product(product.id)
+        try:
+            check_product(product.id)
+        except Exception:
+            # One corrupted product or unexpected database failure must not stop the batch.
+            logger.exception("Unhandled monitor check failure for product %s", product.id)
     CheckResult.objects.filter(checked_at__lt=now - timedelta(days=30)).delete()
 
 
@@ -39,6 +48,12 @@ def check_product(product_id):
     except AdapterError as exc:
         message = str(exc)
         status = Product.Availability.BLOCKED if "blocked" in message.lower() else Product.Availability.ERROR
+        snapshot = None
+        success = False
+    except Exception:
+        logger.exception("Unhandled retailer check failure for product %s", product_id)
+        message = "Retailer availability is currently unavailable."
+        status = Product.Availability.ERROR
         snapshot = None
         success = False
     deliveries = []
@@ -85,6 +100,11 @@ def check_monitor(monitor, product, source, now):
     except AdapterError as exc:
         status = Product.Availability.BLOCKED if "blocked" in str(exc).lower() else Product.Availability.ERROR
         message = str(exc)
+        snapshot = None
+    except Exception:
+        logger.exception("Unhandled retailer check failure for monitor %s", monitor.id)
+        status = Product.Availability.ERROR
+        message = "Retailer availability is currently unavailable."
         snapshot = None
     delivery = None
     with transaction.atomic():

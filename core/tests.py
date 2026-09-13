@@ -6,7 +6,7 @@ from django.db import connection
 from django.utils import timezone
 
 from .models import DiscordWebhook, Monitor, NotificationDelivery, Product, SystemState, User, Validation
-from .monitoring import check_monitor
+from .monitoring import check_due_products, check_monitor
 from .services import AppleCanadaAdapter, AdapterError, BestBuyCanadaAdapter, NintendoCanadaAdapter, ProductSnapshot, decrypt, encrypt
 
 
@@ -153,6 +153,36 @@ class AccountAndMonitorTests(TestCase):
 
         self.assertEqual(transaction_state, [outer_transaction_state])
         self.assertEqual(NotificationDelivery.objects.filter(monitor=monitor).count(), 1)
+
+    def test_unexpected_monitor_check_failure_records_an_error(self):
+        owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        product = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/example", title="Example")
+        webhook = DiscordWebhook.objects.create(owner=owner, name="Discord", encrypted_url=encrypt("https://discord.com/api/webhooks/1/token"))
+        monitor = Monitor.objects.create(owner=owner, product=product, webhook=webhook)
+        source = Mock()
+        source.check.side_effect = ValueError("Unexpected response shape")
+
+        with self.assertLogs("core.monitoring", level="ERROR"):
+            check_monitor(monitor, product, source, timezone.now())
+
+        monitor.refresh_from_db()
+        self.assertEqual(monitor.availability, Product.Availability.ERROR)
+        self.assertEqual(monitor.last_error, "Retailer availability is currently unavailable.")
+        self.assertIsNotNone(monitor.last_checked_at)
+
+    def test_due_product_failure_does_not_stop_later_checks(self):
+        owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        webhook = DiscordWebhook.objects.create(owner=owner, name="Discord", encrypted_url=encrypt("https://discord.com/api/webhooks/1/token"))
+        first = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/first", title="First", next_check_at=timezone.now() - timedelta(minutes=1))
+        second = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/second", title="Second", next_check_at=timezone.now() - timedelta(minutes=1))
+        Monitor.objects.create(owner=owner, product=first, webhook=webhook)
+        Monitor.objects.create(owner=owner, product=second, webhook=webhook)
+
+        with patch("core.monitoring.check_product", side_effect=[RuntimeError("bad product"), None]) as check_product, self.assertLogs("core.monitoring", level="ERROR"):
+            check_due_products()
+
+        self.assertEqual(check_product.call_args_list[0].args, (first.id,))
+        self.assertEqual(check_product.call_args_list[1].args, (second.id,))
 
     def test_confirm_apple_monitor_serializes_last_available_time(self):
         owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
