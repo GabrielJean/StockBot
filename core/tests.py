@@ -174,20 +174,27 @@ class AccountAndMonitorTests(TestCase):
 
 
 class NintendoAdapterTests(TestCase):
-    def fetch_snapshot(self, availability):
-        html = f'''<script type="application/ld+json">{{"@context":"https://schema.org/","@graph":[{{"@type":["Product"],"name":"Nintendo Switch 2 Example","image":"https://images.example/product.jpg","offers":{{"price":"69.99","priceCurrency":"CAD","availability":"https://schema.org/{availability}"}}}}]}}</script>'''
-        response = Mock(status_code=200, text=html)
-        with patch("core.services.requests.get", return_value=response):
-            return NintendoCanadaAdapter().validate("https://www.nintendo.com/en-ca/store/products/nintendo-switch-2-camera-123682/")
+    product_url = "https://www.nintendo.com/en-ca/store/products/nintendo-switch-2-camera-123682/"
 
-    def test_nested_json_ld_in_stock_is_available(self):
-        snapshot = self.fetch_snapshot("InStock")
+    def fetch_snapshot(self, availability, saleable_quantity=None):
+        html = f'''<script type="application/ld+json">{{"@context":"https://schema.org/","@graph":[{{"@type":["Product"],"name":"Nintendo Switch 2 Example","image":"https://images.example/product.jpg","offers":{{"price":"69.99","priceCurrency":"CAD","availability":"https://schema.org/{availability}"}}}}]}}</script>'''
+        page_response = Mock(status_code=200, text=html)
+        graph_response = Mock(status_code=200, json=lambda: {"data": {"product": {"isSalableQty": saleable_quantity}}})
+        with patch("core.services.requests.get", side_effect=[page_response, graph_response]):
+            return NintendoCanadaAdapter().validate(self.product_url)
+
+    def test_saleable_quantity_marks_product_available(self):
+        snapshot = self.fetch_snapshot("OutOfStock", True)
         self.assertEqual(snapshot.availability, "available")
         self.assertEqual(snapshot.price, "$69.99 CAD")
 
-    def test_nested_json_ld_out_of_stock_is_unavailable(self):
-        snapshot = self.fetch_snapshot("OutOfStock")
+    def test_unsaleable_quantity_marks_product_unavailable(self):
+        snapshot = self.fetch_snapshot("InStock", False)
         self.assertEqual(snapshot.availability, "unavailable")
+
+    def test_page_stock_metadata_is_ignored_without_saleable_quantity(self):
+        snapshot = self.fetch_snapshot("InStock")
+        self.assertEqual(snapshot.availability, "unknown")
 
 
 class BestBuyAdapterTests(TestCase):

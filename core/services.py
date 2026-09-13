@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from urllib.parse import urlparse, urlunparse
 
@@ -60,6 +61,8 @@ def masked_url(value):
 class NintendoCanadaAdapter:
     key = "nintendo_ca"
     domains = {"www.nintendo.com", "nintendo.com"}
+    product_endpoint = "https://graph.nintendo.com/"
+    product_query_hash = "369a9c8cc97fb66d134f9aa89741166665dfdf5d82d23ce1b3fd61962482c181"
 
     def can_handle_url(self, raw_url):
         parsed = urlparse(raw_url)
@@ -106,22 +109,35 @@ class NintendoCanadaAdapter:
                 if offers.get("price"):
                     currency = offers.get("priceCurrency", "CAD")
                     price = f"${offers['price']} {currency}"
-                stock = str(offers.get("availability", "")).rsplit("/", 1)[-1].lower()
-                if stock == "instock":
-                    availability = "available"
-                elif stock in {"outofstock", "soldout", "discontinued"}:
-                    availability = "unavailable"
         title = title or (soup.select_one("meta[property='og:title']") or {}).get("content", "")
         image = image or (soup.select_one("meta[property='og:image']") or {}).get("content", "")
-        text = soup.get_text(" ", strip=True).lower()
-        if availability == "unknown":
-            if any(token in text for token in ("out of stock", "sold out", "currently unavailable")):
-                availability = "unavailable"
-            elif any(token in text for token in ("add to cart", "add to bag", "buy now")):
-                availability = "available"
+        saleable_quantity = self._saleable_quantity(url)
+        if saleable_quantity is not None:
+            availability = "available" if saleable_quantity else "unavailable"
         if not title:
             raise AdapterError("The page did not contain a recognizable product.")
         return ProductSnapshot(url, title[:255], image or "", price, availability)
+
+    def _saleable_quantity(self, url):
+        """Return Nintendo's explicit saleability flag, when the SKU endpoint supports it."""
+        match = re.search(r"-(\d+)$", urlparse(url).path.rstrip("/"))
+        if not match:
+            return None
+        params = {
+            "operationName": "ProductBySku",
+            "variables": json.dumps({"personalized": False, "sku": match.group(1)}, separators=(",", ":")),
+            "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": self.product_query_hash}}, separators=(",", ":")),
+        }
+        try:
+            response = requests.get(self.product_endpoint, params=params, timeout=settings.NINTENDO_TIMEOUT_SECONDS, headers={"User-Agent": settings.STOCKBOT_USER_AGENT, "Accept": "application/json", "Accept-Language": "en-CA,en;q=0.9"})
+            if response.status_code != 200:
+                return None
+            product = response.json().get("data", {}).get("product")
+        except (requests.RequestException, ValueError, AttributeError):
+            return None
+        if not isinstance(product, dict) or not isinstance(product.get("isSalableQty"), bool):
+            return None
+        return product["isSalableQty"]
 
     def _product_nodes(self, payload):
         """Yield Product dictionaries from plain, list, and @graph JSON-LD documents."""
