@@ -42,6 +42,8 @@ class User(AbstractUser):
 class SystemState(models.Model):
     initial_admin_claimed = models.BooleanField(default=False)
     scheduler_heartbeat = models.DateTimeField(null=True, blank=True)
+    scheduler_started_at = models.DateTimeField(null=True, blank=True)
+    scheduler_completed_at = models.DateTimeField(null=True, blank=True)
 
 
 class DiscordWebhook(models.Model):
@@ -90,6 +92,7 @@ class Validation(models.Model):
     postal_code = models.CharField(max_length=7, blank=True)
     fulfillment = models.CharField(max_length=12, default="shipping")
     location_keys = models.JSONField(default=list)
+    check_interval_seconds = models.PositiveIntegerField(default=60)
     external_id = models.CharField(max_length=128, blank=True)
     expires_at = models.DateTimeField()
     created_at = models.DateTimeField(auto_now_add=True)
@@ -104,6 +107,8 @@ class Monitor(models.Model):
     postal_code = models.CharField(max_length=7, blank=True)
     fulfillment = models.CharField(max_length=12, default="shipping")
     location_keys = models.JSONField(default=list)
+    check_interval_seconds = models.PositiveIntegerField(default=60)
+    next_check_at = models.DateTimeField(null=True, blank=True)
     availability = models.CharField(max_length=16, default="unknown")
     last_checked_at = models.DateTimeField(null=True, blank=True)
     last_available_at = models.DateTimeField(null=True, blank=True)

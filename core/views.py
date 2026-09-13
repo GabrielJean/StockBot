@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.password_validation import validate_password
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.http import JsonResponse, HttpResponse
 from django.middleware.csrf import get_token
@@ -13,6 +14,9 @@ from django.views.decorators.http import require_http_methods
 
 from .models import DiscordWebhook, Monitor, Product, SystemState, User, Validation
 from .services import AdapterError, encrypt, get_adapter_for_url, masked_url, post_discord
+
+
+CHECK_INTERVALS = {30, 60, 300, 900, 1800, 3600, 86400}
 
 
 def payload(request):
@@ -42,7 +46,7 @@ def serialize_webhook(item):
 def serialize_monitor(item):
     product = item.product
     status = item.availability if item.availability != "unknown" else product.availability
-    return {"id": item.id, "active": item.active, "webhookId": item.webhook_id, "webhookName": item.webhook.name, "fulfillment": item.fulfillment, "locationKeys": item.location_keys, "lastAvailableAt": item.last_available_at, "product": {"id": product.id, "title": product.title, "url": product.canonical_url, "imageUrl": product.image_url, "price": product.price, "availability": status, "lastCheckedAt": item.last_checked_at or product.last_checked_at, "lastError": item.last_error or product.last_error}}
+    return {"id": item.id, "active": item.active, "webhookId": item.webhook_id, "webhookName": item.webhook.name, "fulfillment": item.fulfillment, "locationKeys": item.location_keys, "checkIntervalSeconds": item.check_interval_seconds, "lastAvailableAt": item.last_available_at, "product": {"id": product.id, "title": product.title, "url": product.canonical_url, "imageUrl": product.image_url, "price": product.price, "availability": status, "lastCheckedAt": item.last_checked_at or product.last_checked_at, "lastError": item.last_error or product.last_error}}
 
 
 def serialize_staff_monitor(item):
@@ -54,7 +58,21 @@ def serialize_staff_monitor(item):
 @require_http_methods(["GET"])
 def health(request):
     state = SystemState.objects.first()
-    return result({"ok": True, "schedulerHeartbeat": state.scheduler_heartbeat if state else None})
+    completed_at = state.scheduler_completed_at if state else None
+    scheduler_healthy = not settings.SCHEDULER_ENABLED or (
+        completed_at is not None
+        and completed_at >= timezone.now() - timedelta(seconds=settings.SCHEDULER_STALE_SECONDS)
+    )
+    return result(
+        {
+            "ok": scheduler_healthy,
+            "schedulerEnabled": settings.SCHEDULER_ENABLED,
+            "schedulerHealthy": scheduler_healthy,
+            "schedulerHeartbeat": state.scheduler_heartbeat if state else None,
+            "schedulerCompletedAt": completed_at,
+        },
+        200 if scheduler_healthy else 503,
+    )
 
 
 def spa(request):
@@ -152,6 +170,9 @@ def api_collection(request, resource):
         if not source:
             return error("This retailer URL is not supported yet.", 422)
         fulfillment = data.get("fulfillment", "shipping")
+        check_interval_seconds = data.get("checkIntervalSeconds", 60)
+        if isinstance(check_interval_seconds, bool) or check_interval_seconds not in CHECK_INTERVALS:
+            return error("Choose a valid check interval.")
         location_keys = [str(key)[:64] for key in data.get("locationKeys", []) if str(key).strip()]
         external_id = data.get("applePartNumber", "").strip().upper()
         if fulfillment not in {"shipping", "pickup", "either"}:
@@ -168,7 +189,7 @@ def api_collection(request, resource):
             snapshot = source.validate(data.get("url", ""), postal_code, fulfillment, location_keys, external_id)
         except AdapterError as exc:
             return error(str(exc), 422)
-        validation = Validation.objects.create(owner=request.user, canonical_url=snapshot.canonical_url, title=snapshot.title, image_url=snapshot.image_url, price=snapshot.price, availability=snapshot.availability, postal_code=postal_code, fulfillment=fulfillment, location_keys=location_keys, external_id=snapshot.external_id, expires_at=timezone.now() + timedelta(minutes=15))
+        validation = Validation.objects.create(owner=request.user, canonical_url=snapshot.canonical_url, title=snapshot.title, image_url=snapshot.image_url, price=snapshot.price, availability=snapshot.availability, postal_code=postal_code, fulfillment=fulfillment, location_keys=location_keys, check_interval_seconds=check_interval_seconds, external_id=snapshot.external_id, expires_at=timezone.now() + timedelta(minutes=15))
         return result({"validation": {"id": validation.id, "title": validation.title, "url": validation.canonical_url, "imageUrl": validation.image_url, "price": validation.price, "availability": validation.availability}})
     if resource == "confirm-monitor" and request.method == "POST":
         validation = Validation.objects.filter(id=data.get("validationId"), owner=request.user, expires_at__gt=timezone.now()).first()
@@ -179,14 +200,16 @@ def api_collection(request, resource):
         if not source:
             return error("This monitor validation has an unsupported product URL.", 422)
         product, _ = Product.objects.update_or_create(canonical_url=validation.canonical_url, defaults={"retailer": source.key, "external_id": validation.external_id, "title": validation.title, "image_url": validation.image_url, "price": validation.price, "availability": validation.availability})
-        monitor, created = Monitor.objects.get_or_create(owner=request.user, product=product, defaults={"webhook": webhook, "postal_code": validation.postal_code, "fulfillment": validation.fulfillment, "location_keys": validation.location_keys})
+        monitor, created = Monitor.objects.get_or_create(owner=request.user, product=product, defaults={"webhook": webhook, "postal_code": validation.postal_code, "fulfillment": validation.fulfillment, "location_keys": validation.location_keys, "check_interval_seconds": validation.check_interval_seconds})
         if not created:
             monitor.webhook = webhook
             monitor.active = True
             monitor.postal_code = validation.postal_code
             monitor.fulfillment = validation.fulfillment
             monitor.location_keys = validation.location_keys
-            monitor.save(update_fields=["webhook", "active", "postal_code", "fulfillment", "location_keys", "updated_at"])
+            monitor.check_interval_seconds = validation.check_interval_seconds
+            monitor.next_check_at = None
+            monitor.save(update_fields=["webhook", "active", "postal_code", "fulfillment", "location_keys", "check_interval_seconds", "next_check_at", "updated_at"])
         validation.delete()
         return result({"monitor": serialize_monitor(monitor)}, 201)
     if resource == "staff-users" and request.method == "GET":
@@ -215,7 +238,14 @@ def api_item(request, resource, object_id):
             return result({"ok": True})
         if "active" in data:
             item.active = bool(data["active"])
-            item.save(update_fields=["active", "updated_at"])
+        if "checkIntervalSeconds" in data:
+            interval = data["checkIntervalSeconds"]
+            if isinstance(interval, bool) or interval not in CHECK_INTERVALS:
+                return error("Choose a valid check interval.")
+            item.check_interval_seconds = interval
+            item.next_check_at = None
+        if "active" in data or "checkIntervalSeconds" in data:
+            item.save(update_fields=["active", "check_interval_seconds", "next_check_at", "updated_at"])
         return result({"monitor": serialize_monitor(item)})
     if resource == "staff-monitors":
         if not request.user.is_staff:

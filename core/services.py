@@ -81,6 +81,23 @@ class NintendoCanadaAdapter:
         return self._fetch(product.canonical_url)
 
     def _fetch(self, url):
+        """Use Nintendo GraphQL for availability, with page metadata as a fallback."""
+        sku = self._sku_from_url(url)
+        graphql_product = self._product_by_sku(sku) if sku else None
+        graphql_availability = "unknown"
+        if graphql_product:
+            is_salable = graphql_product.get("isSalableQty")
+            graphql_availability = "available" if is_salable is True else "unavailable" if is_salable is False else "unknown"
+            title = str(graphql_product.get("name") or "").strip()
+            if title:
+                prices = graphql_product.get("prices")
+                prices = prices if isinstance(prices, dict) else {}
+                price_value = prices.get("finalPrice", prices.get("regularPrice"))
+                currency = prices.get("currency") or "CAD"
+                price = f"${price_value} {currency}" if price_value is not None else ""
+                return ProductSnapshot(url, title[:255], "", price, graphql_availability, str(graphql_product.get("sku") or sku))
+
+        # GraphQL metadata is unavailable; page content may fill metadata only.
         try:
             response = requests.get(url, timeout=settings.NINTENDO_TIMEOUT_SECONDS, headers={"User-Agent": settings.STOCKBOT_USER_AGENT, "Accept-Language": "en-CA,en;q=0.9"})
         except requests.RequestException as exc:
@@ -93,7 +110,7 @@ class NintendoCanadaAdapter:
         title = ""
         image = ""
         price = ""
-        availability = "unknown"
+        availability = graphql_availability
         for script in soup.select('script[type="application/ld+json"]'):
             try:
                 payload = json.loads(script.string or "{}")
@@ -106,38 +123,54 @@ class NintendoCanadaAdapter:
                 offers = value.get("offers", {})
                 if isinstance(offers, list):
                     offers = offers[0] if offers else {}
-                if offers.get("price"):
+                if isinstance(offers, dict) and offers.get("price"):
                     currency = offers.get("priceCurrency", "CAD")
                     price = f"${offers['price']} {currency}"
         title = title or (soup.select_one("meta[property='og:title']") or {}).get("content", "")
         image = image or (soup.select_one("meta[property='og:image']") or {}).get("content", "")
-        saleable_quantity = self._saleable_quantity(url)
-        if saleable_quantity is not None:
-            availability = "available" if saleable_quantity else "unavailable"
         if not title:
             raise AdapterError("The page did not contain a recognizable product.")
-        return ProductSnapshot(url, title[:255], image or "", price, availability)
+        return ProductSnapshot(url, title[:255], image or "", price, availability, sku or "")
 
-    def _saleable_quantity(self, url):
-        """Return Nintendo's explicit saleability flag, when the SKU endpoint supports it."""
+    def _sku_from_url(self, url):
         match = re.search(r"-(\d+)$", urlparse(url).path.rstrip("/"))
-        if not match:
-            return None
+        return match.group(1) if match else None
+
+    def _product_by_sku(self, sku):
+        """Return Nintendo's ProductBySku object, or None for an unavailable response."""
         params = {
             "operationName": "ProductBySku",
-            "variables": json.dumps({"personalized": False, "sku": match.group(1)}, separators=(",", ":")),
+            "variables": json.dumps({"personalized": False, "sku": str(sku)}, separators=(",", ":")),
             "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": self.product_query_hash}}, separators=(",", ":")),
         }
+        headers = {
+            "User-Agent": settings.STOCKBOT_USER_AGENT,
+            "Accept": "*/*",
+            "Accept-Language": "en-CA,en;q=0.9",
+            "Content-Type": "application/json",
+            "apollographql-client-name": "ncom",
+            "apollographql-client-version": "1.0.0",
+            "locale": "en-CA",
+            "Origin": "https://www.nintendo.com",
+            "Referer": "https://www.nintendo.com/",
+            "x-nintendo-graph": "true",
+        }
         try:
-            response = requests.get(self.product_endpoint, params=params, timeout=settings.NINTENDO_TIMEOUT_SECONDS, headers={"User-Agent": settings.STOCKBOT_USER_AGENT, "Accept": "application/json", "Accept-Language": "en-CA,en;q=0.9"})
+            response = requests.get(self.product_endpoint, params=params, timeout=settings.NINTENDO_TIMEOUT_SECONDS, headers=headers)
             if response.status_code != 200:
+                logger.warning("Nintendo GraphQL returned HTTP %s for SKU %s", response.status_code, sku)
                 return None
-            product = response.json().get("data", {}).get("product")
-        except (requests.RequestException, ValueError, AttributeError):
+            payload = response.json()
+        except requests.RequestException as exc:
+            logger.warning("Nintendo GraphQL request failed for SKU %s: %s", sku, exc.__class__.__name__)
             return None
-        if not isinstance(product, dict) or not isinstance(product.get("isSalableQty"), bool):
+        except ValueError:
+            logger.warning("Nintendo GraphQL returned invalid JSON for SKU %s", sku)
             return None
-        return product["isSalableQty"]
+        if not isinstance(payload, dict) or payload.get("errors"):
+            return None
+        product = payload.get("data", {}).get("product")
+        return product if isinstance(product, dict) else None
 
     def _product_nodes(self, payload):
         """Yield Product dictionaries from plain, list, and @graph JSON-LD documents."""

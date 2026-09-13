@@ -2,7 +2,7 @@ from unittest.mock import Mock, patch
 from datetime import timedelta
 
 from django.test import Client, TestCase, override_settings
-from django.db import connection
+from django.db import OperationalError, connection
 from django.utils import timezone
 
 from .models import DiscordWebhook, Monitor, NotificationDelivery, Product, SystemState, User, Validation
@@ -12,6 +12,34 @@ from .services import AppleCanadaAdapter, AdapterError, BestBuyCanadaAdapter, Ni
 
 @override_settings(WEBHOOK_ENCRYPTION_KEY="HsdQznbn2wz1LikNoUvwzmgskkODlG5pgvAd1uKVXpQ=")
 class AccountAndMonitorTests(TestCase):
+    def test_health_requires_a_recent_completed_scheduler_pass(self):
+        response = self.client.get("/healthz/")
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(response.json()["schedulerHealthy"])
+
+        now = timezone.now()
+        SystemState.objects.create(pk=1, scheduler_heartbeat=now, scheduler_completed_at=now)
+        response = self.client.get("/healthz/")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["schedulerHealthy"])
+
+    @override_settings(SCHEDULER_STALE_SECONDS=60)
+    def test_health_rejects_a_stale_completed_scheduler_pass(self):
+        stale = timezone.now() - timedelta(seconds=61)
+        SystemState.objects.create(pk=1, scheduler_heartbeat=stale, scheduler_completed_at=stale)
+
+        response = self.client.get("/healthz/")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(response.json()["ok"])
+
+    @override_settings(SCHEDULER_ENABLED=False)
+    def test_health_allows_an_intentionally_disabled_scheduler(self):
+        response = self.client.get("/healthz/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["schedulerEnabled"])
+
     def test_login_returns_csrf_token_for_authenticated_mutations(self):
         client = Client(enforce_csrf_checks=True)
         initial = client.get("/api/v1/")
@@ -137,6 +165,35 @@ class AccountAndMonitorTests(TestCase):
 
         monitor.refresh_from_db()
         self.assertEqual(monitor.last_available_at, checked_at)
+        self.assertEqual(monitor.next_check_at, checked_at + timedelta(seconds=60))
+
+    def test_monitor_interval_can_be_updated_by_its_owner(self):
+        owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        product = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/example", title="Example")
+        webhook = DiscordWebhook.objects.create(owner=owner, name="Discord", encrypted_url=encrypt("https://discord.com/api/webhooks/1/token"))
+        monitor = Monitor.objects.create(owner=owner, product=product, webhook=webhook, next_check_at=timezone.now() + timedelta(hours=1))
+
+        self.client.force_login(owner)
+        response = self.client.patch(f"/api/v1/monitors/{monitor.id}/", data={"checkIntervalSeconds": 900}, content_type="application/json")
+
+        monitor.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["monitor"]["checkIntervalSeconds"], 900)
+        self.assertEqual(monitor.check_interval_seconds, 900)
+        self.assertIsNone(monitor.next_check_at)
+
+    def test_monitor_interval_rejects_unsupported_values(self):
+        owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        product = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/example", title="Example")
+        webhook = DiscordWebhook.objects.create(owner=owner, name="Discord", encrypted_url=encrypt("https://discord.com/api/webhooks/1/token"))
+        monitor = Monitor.objects.create(owner=owner, product=product, webhook=webhook)
+
+        self.client.force_login(owner)
+        response = self.client.patch(f"/api/v1/monitors/{monitor.id}/", data={"checkIntervalSeconds": 120}, content_type="application/json")
+
+        self.assertEqual(response.status_code, 400)
+        monitor.refresh_from_db()
+        self.assertEqual(monitor.check_interval_seconds, 60)
 
     def test_monitor_delivery_runs_after_transaction_commits(self):
         owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
@@ -183,6 +240,26 @@ class AccountAndMonitorTests(TestCase):
 
         self.assertEqual(check_product.call_args_list[0].args, (first.id,))
         self.assertEqual(check_product.call_args_list[1].args, (second.id,))
+        state = SystemState.objects.get(pk=1)
+        self.assertIsNotNone(state.scheduler_started_at)
+        self.assertIsNotNone(state.scheduler_completed_at)
+
+    def test_scheduler_retries_a_locked_heartbeat_update(self):
+        original = SystemState.objects.update_or_create
+        attempts = 0
+
+        def update_or_create(*args, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise OperationalError("database is locked")
+            return original(*args, **kwargs)
+
+        with patch.object(SystemState.objects, "update_or_create", side_effect=update_or_create), patch("core.monitoring.time.sleep") as sleep:
+            check_due_products()
+
+        self.assertEqual(sleep.call_count, 1)
+        self.assertIsNotNone(SystemState.objects.get(pk=1).scheduler_completed_at)
 
     def test_confirm_apple_monitor_serializes_last_available_time(self):
         owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
@@ -193,6 +270,7 @@ class AccountAndMonitorTests(TestCase):
             external_id="MJR84VC/A",
             title="Apple product MJR84VC/A",
             availability=Product.Availability.UNAVAILABLE,
+            check_interval_seconds=300,
             expires_at=timezone.now() + timedelta(minutes=15),
         )
 
@@ -201,6 +279,7 @@ class AccountAndMonitorTests(TestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertIsNone(response.json()["monitor"]["lastAvailableAt"])
+        self.assertEqual(response.json()["monitor"]["checkIntervalSeconds"], 300)
 
 
 class NintendoAdapterTests(TestCase):
@@ -210,7 +289,7 @@ class NintendoAdapterTests(TestCase):
         html = f'''<script type="application/ld+json">{{"@context":"https://schema.org/","@graph":[{{"@type":["Product"],"name":"Nintendo Switch 2 Example","image":"https://images.example/product.jpg","offers":{{"price":"69.99","priceCurrency":"CAD","availability":"https://schema.org/{availability}"}}}}]}}</script>'''
         page_response = Mock(status_code=200, text=html)
         graph_response = Mock(status_code=200, json=lambda: {"data": {"product": {"isSalableQty": saleable_quantity}}})
-        with patch("core.services.requests.get", side_effect=[page_response, graph_response]):
+        with patch("core.services.requests.get", side_effect=[graph_response, page_response]):
             return NintendoCanadaAdapter().validate(self.product_url)
 
     def test_saleable_quantity_marks_product_available(self):
@@ -225,6 +304,46 @@ class NintendoAdapterTests(TestCase):
     def test_page_stock_metadata_is_ignored_without_saleable_quantity(self):
         snapshot = self.fetch_snapshot("InStock")
         self.assertEqual(snapshot.availability, "unknown")
+
+    @override_settings(STOCKBOT_USER_AGENT="StockBot/1.0 (contact: ops@example.com)")
+    def test_saleability_request_uses_nintendo_graph_headers(self):
+        html = '<script type="application/ld+json">{"@type":"Product","name":"Nintendo Switch 2 Example"}</script>'
+        page_response = Mock(status_code=200, text=html)
+        graph_response = Mock(status_code=200, json=lambda: {"data": {"product": {"isSalableQty": True}}})
+
+        with patch("core.services.requests.get", side_effect=[graph_response, page_response]) as request_get:
+            NintendoCanadaAdapter().validate(self.product_url)
+
+        headers = request_get.call_args_list[0].kwargs["headers"]
+        self.assertEqual(headers["User-Agent"], "StockBot/1.0 (contact: ops@example.com)")
+        self.assertEqual(headers["apollographql-client-name"], "ncom")
+        self.assertEqual(headers["locale"], "en-CA")
+        self.assertEqual(headers["Origin"], "https://www.nintendo.com")
+        self.assertEqual(headers["x-nintendo-graph"], "true")
+
+    def test_graphql_metadata_is_preferred_without_a_page_request(self):
+        graph_response = Mock(
+            status_code=200,
+            json=lambda: {
+                "data": {
+                    "product": {
+                        "sku": "123682",
+                        "name": "Nintendo Switch 2 Camera",
+                        "prices": {"finalPrice": "69.99", "currency": "CAD"},
+                        "isSalableQty": True,
+                    }
+                }
+            },
+        )
+
+        with patch("core.services.requests.get", return_value=graph_response) as request_get:
+            snapshot = NintendoCanadaAdapter().validate(self.product_url)
+
+        self.assertEqual(request_get.call_count, 1)
+        self.assertEqual(snapshot.title, "Nintendo Switch 2 Camera")
+        self.assertEqual(snapshot.price, "$69.99 CAD")
+        self.assertEqual(snapshot.availability, "available")
+        self.assertEqual(snapshot.external_id, "123682")
 
 
 class BestBuyAdapterTests(TestCase):

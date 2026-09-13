@@ -48,6 +48,15 @@ const validCanadianPostalCode = (value) =>
   /^[ABCEGHJKLMNPRSTVXY]\d[ABCEGHJKLMNPRSTVWXYZ]\d[ABCEGHJKLMNPRSTVWXYZ]\d$/.test(
     value.replace(/\s/g, ""),
   );
+const CHECK_INTERVALS = [
+  [30, "Every 30 seconds"],
+  [60, "Every 1 minute"],
+  [300, "Every 5 minutes"],
+  [900, "Every 15 minutes"],
+  [1800, "Every 30 minutes"],
+  [3600, "Every 1 hour"],
+  [86400, "Every 1 day"],
+];
 const APPLE_IPHONE_CONFIGURATIONS = [
   ["iPhone 18 Pro", "Burgundy", "256 GB", "MJR74VC/A"],
   ["iPhone 18 Pro", "Burgundy", "512 GB", "MJRD4VC/A"],
@@ -187,6 +196,7 @@ function AddMonitor({ webhooks, onCreated }) {
     [applePartNumber, setApplePartNumber] = useState(""),
     [postalCode, setPostalCode] = useState(""),
     [fulfillment, setFulfillment] = useState("shipping"),
+    [checkIntervalSeconds, setCheckIntervalSeconds] = useState(60),
     [nearbyStores, setNearbyStores] = useState([]),
     [locationKeys, setLocationKeys] = useState([]),
     [preview, setPreview] = useState(null),
@@ -294,6 +304,7 @@ function AddMonitor({ webhooks, onCreated }) {
           applePartNumber,
           postalCode,
           fulfillment,
+          checkIntervalSeconds,
           locationKeys,
         }),
       });
@@ -317,6 +328,7 @@ function AddMonitor({ webhooks, onCreated }) {
       setNearbyStores([]);
       setLocationKeys([]);
       setFulfillment("shipping");
+      setCheckIntervalSeconds(60);
     } catch (error) {
       setMessage(error.message);
     }
@@ -369,6 +381,17 @@ function AddMonitor({ webhooks, onCreated }) {
             required
           />
         </label>}
+        <label className="field-label">
+          Check interval
+          <select
+            value={checkIntervalSeconds}
+            onChange={(e) => setCheckIntervalSeconds(Number(e.target.value))}
+          >
+            {CHECK_INTERVALS.map(([seconds, label]) => (
+              <option key={seconds} value={seconds}>{label}</option>
+            ))}
+          </select>
+        </label>
         {isAppleUrl && <>
           <label className="field-label">
             iPhone configuration
@@ -600,10 +623,10 @@ function Dashboard({ user, logout }) {
       setMessage(error.message);
     }
   };
-  const updateMonitor = async (id, active) => {
+  const updateMonitor = async (id, changes) => {
     await request(`monitors/${id}/`, {
       method: "PATCH",
-      body: JSON.stringify({ active }),
+      body: JSON.stringify(changes),
     });
     load();
   };
@@ -711,7 +734,7 @@ function Dashboard({ user, logout }) {
                         <div className="monitor-actions">
                           <button
                             className="link"
-                            onClick={() => updateMonitor(m.id, !m.active)}
+                            onClick={() => updateMonitor(m.id, { active: !m.active })}
                           >
                             {m.active ? "Pause" : "Resume"}
                           </button>
@@ -730,14 +753,27 @@ function Dashboard({ user, logout }) {
                     <p className="meta">
                        Discord: {m.webhookName}
                        <br />
+                       Check interval: {CHECK_INTERVALS.find(([seconds]) => seconds === m.checkIntervalSeconds)?.[1] || "Every 1 minute"}
+                       <br />
                        Checked: {formatTime(m.product.lastCheckedAt)}
                        <br />
                        Last available: {formatTime(m.lastAvailableAt)}
                      </p>
-                    {m.product.lastError && (
-                      <p className="warning">{m.product.lastError}</p>
-                    )}
-                    <a href={m.product.url} target="_blank">
+                     {m.product.lastError && (
+                       <p className="warning">{m.product.lastError}</p>
+                     )}
+                     <label className="field-label">
+                       Check interval
+                       <select
+                         value={m.checkIntervalSeconds}
+                         onChange={(e) => updateMonitor(m.id, { checkIntervalSeconds: Number(e.target.value) })}
+                       >
+                         {CHECK_INTERVALS.map(([seconds, label]) => (
+                           <option key={seconds} value={seconds}>{label}</option>
+                         ))}
+                       </select>
+                     </label>
+                     <a href={m.product.url} target="_blank">
                       View product
                     </a>
                   </div>

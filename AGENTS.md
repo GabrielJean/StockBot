@@ -46,7 +46,7 @@ Do not commit generated `core/static/`, `frontend/node_modules/`, SQLite databas
 
 ## Monitoring And Notifications
 
-- `Product` represents retailer-wide product information; `Monitor` stores user-specific destination and fulfillment settings. Keep this distinction intact.
+- `Product` represents retailer-wide product information; `Monitor` stores user-specific destination, fulfillment, and check-interval settings. Keep this distinction intact.
 - Availability may be `available`, `unavailable`, `unknown`, `error`, or `blocked`. Never convert retailer parsing failures, access denial, CAPTCHA-like responses, or network errors into `unavailable`.
 - Alerts fire only on an unavailable-to-available transition for an armed monitor. A confirmed unavailable state rearms it. Preserve this invariant and deliver Discord notifications only after database transactions complete.
 - The production process intentionally runs one Gunicorn worker and one embedded scheduler against SQLite. Do not add workers, replicas, or a second scheduler process without redesigning scheduling and database coordination.
@@ -91,8 +91,10 @@ Do not commit generated `core/static/`, `frontend/node_modules/`, SQLite databas
 
 ### Monitoring Flow
 
-- `check_due_products()` updates the scheduler heartbeat, processes at most 100 due products, and deletes `CheckResult` records older than 30 days. Preserve all three responsibilities.
+- `check_due_products()` records scheduler start/completion timestamps, processes at most 100 due products in oldest-due order, and deletes `CheckResult` records older than 30 days. Preserve all four responsibilities.
+- `/healthz/` is a scheduler-readiness check. With scheduling enabled, it must return a non-2xx response when the last completed pass is absent or older than `SCHEDULER_STALE_SECONDS`; Docker uses it to restart a service with stalled checks.
 - Nintendo-like shared availability is checked once per `Product`. Best Buy and Apple availability depends on monitor fulfillment/store selections, so `check_product()` calls `check_monitor()` once per active monitor.
+- Check intervals belong to `Monitor`, not `Product`. The scheduler runs every 30 seconds to support the fastest allowed interval, but only monitors whose `next_check_at` is due may be updated, alerted, or rescheduled.
 - Successful checks update product metadata, `last_checked_at`, `last_success_at`, availability, and the next regular check. Failed checks set `error` or `blocked`, retain prior product metadata, and use the bounded slower retry interval.
 - Lock the affected `Product` or `Monitor` row while reading prior availability, updating `armed`, and recording state. This prevents simultaneous checks from sending duplicate restock alerts.
 - An `unavailable` result always rearms the monitor. An `available` result disarms and alerts only when the preceding result was not available and the monitor was armed. `unknown`, `error`, and `blocked` neither rearm nor generate alerts.
