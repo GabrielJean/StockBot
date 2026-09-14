@@ -57,6 +57,11 @@ const CHECK_INTERVALS = [
   [3600, "Every 1 hour"],
   [86400, "Every 1 day"],
 ];
+const RETAILER_NAMES = {
+  nintendo_ca: "Nintendo Canada",
+  bestbuy_ca: "Best Buy Canada",
+  apple_ca: "Apple Canada",
+};
 const APPLE_IPHONE_CONFIGURATIONS = [
   ["iPhone 18 Pro", "Burgundy", "256 GB", "MJR74VC/A"],
   ["iPhone 18 Pro", "Burgundy", "512 GB", "MJRD4VC/A"],
@@ -582,6 +587,8 @@ function Dashboard({ user, logout }) {
     [webhookForm, setWebhookForm] = useState({ name: "", url: "" }),
     [users, setUsers] = useState([]),
     [adminMonitors, setAdminMonitors] = useState([]),
+    [requestLogs, setRequestLogs] = useState([]),
+    [requestLogRetailer, setRequestLogRetailer] = useState(""),
     [message, setMessage] = useState("");
   const load = async () => {
     try {
@@ -597,12 +604,14 @@ function Dashboard({ user, logout }) {
   };
   const loadUsers = async () => {
     try {
-      const [userData, monitorData] = await Promise.all([
+      const [userData, monitorData, requestLogData] = await Promise.all([
         request("staff-users/"),
         request("staff-monitors/"),
+        request("staff-request-logs/"),
       ]);
       setUsers(userData.users);
       setAdminMonitors(monitorData.monitors);
+      setRequestLogs(requestLogData.logs);
     } catch (error) {
       setMessage(error.message);
     }
@@ -745,7 +754,8 @@ function Dashboard({ user, logout }) {
                             Remove
                           </button>
                         </div>
-                      </div>
+                    </div>
+                    <p className="eyebrow">{RETAILER_NAMES[m.product.retailer] || m.product.retailer}</p>
                     <h3>{m.product.title}</h3>
                     <p className="price">
                       {m.product.price || "Price unavailable"}
@@ -905,6 +915,34 @@ function Dashboard({ user, logout }) {
                 </article>
               ))}
               {!adminMonitors.length && <article className="empty">No monitors exist.</article>}
+            </section>
+            <h2 className="section-title">Retailer request logs</h2>
+            <section className="panel">
+              <label className="field-label">
+                Store
+                <select value={requestLogRetailer} onChange={(e) => setRequestLogRetailer(e.target.value)}>
+                  <option value="">All stores</option>
+                  <option value="nintendo_ca">Nintendo Canada</option>
+                  <option value="bestbuy_ca">Best Buy Canada</option>
+                  <option value="apple_ca">Apple Canada</option>
+                </select>
+              </label>
+              <p className="fine">The latest 100 safe request outcomes are retained for 30 days. Request URLs, query data, headers, bodies, and responses are not stored.</p>
+            </section>
+            <section className="list">
+              {requestLogs.filter((log) => !requestLogRetailer || log.retailer === requestLogRetailer).map((log) => (
+                <article key={log.id}>
+                  <div>
+                    <strong>{log.retailer.replace("_", " ")} · {log.endpoint}</strong>
+                    <p>{formatTime(log.createdAt)}</p>
+                  </div>
+                  <div className={log.error || (log.httpStatus && log.httpStatus >= 400) ? "warning" : ""}>
+                    {log.httpStatus ? `HTTP ${log.httpStatus}` : "No HTTP response"}
+                    {log.error && ` · ${log.error}`}
+                  </div>
+                </article>
+              ))}
+              {!requestLogs.filter((log) => !requestLogRetailer || log.retailer === requestLogRetailer).length && <article className="empty">No retained request logs for this store.</article>}
             </section>
           </>
         )}

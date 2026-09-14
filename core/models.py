@@ -128,6 +128,17 @@ class CheckResult(models.Model):
     checked_at = models.DateTimeField(auto_now_add=True)
 
 
+class RetailerRequestLog(models.Model):
+    retailer = models.CharField(max_length=32)
+    endpoint = models.CharField(max_length=64)
+    http_status = models.PositiveSmallIntegerField(null=True, blank=True)
+    error = models.CharField(max_length=80, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["retailer", "-created_at"], name="core_retail_retailer_5e1_idx")]
+
+
 class NotificationDelivery(models.Model):
     monitor = models.ForeignKey(Monitor, on_delete=models.CASCADE, related_name="deliveries")
     event_type = models.CharField(max_length=32, default="restock")

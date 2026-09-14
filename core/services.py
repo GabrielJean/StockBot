@@ -12,12 +12,27 @@ from cryptography.fernet import Fernet
 from django.conf import settings
 from django.utils import timezone
 
+from .models import RetailerRequestLog
+
 
 logger = logging.getLogger(__name__)
 
 
 class AdapterError(Exception):
     pass
+
+
+def record_retailer_request(retailer, endpoint, response=None, error=""):
+    """Persist a compact diagnostic record without retaining sensitive request data."""
+    try:
+        RetailerRequestLog.objects.create(
+            retailer=retailer,
+            endpoint=endpoint,
+            http_status=getattr(response, "status_code", None),
+            error=error[:80],
+        )
+    except Exception:
+        logger.exception("Unable to record retailer request diagnostic")
 
 
 @dataclass
@@ -101,7 +116,9 @@ class NintendoCanadaAdapter:
         try:
             response = requests.get(url, timeout=settings.NINTENDO_TIMEOUT_SECONDS, headers={"User-Agent": settings.STOCKBOT_USER_AGENT, "Accept-Language": "en-CA,en;q=0.9"})
         except requests.RequestException as exc:
+            record_retailer_request(self.key, "product-page", error=exc.__class__.__name__)
             raise AdapterError(f"Network error: {exc.__class__.__name__}") from exc
+        record_retailer_request(self.key, "product-page", response)
         if response.status_code in {401, 403, 429}:
             raise AdapterError("Retailer access is currently blocked.")
         if response.status_code != 200:
@@ -157,14 +174,17 @@ class NintendoCanadaAdapter:
         }
         try:
             response = requests.get(self.product_endpoint, params=params, timeout=settings.NINTENDO_TIMEOUT_SECONDS, headers=headers)
+            record_retailer_request(self.key, "saleability", response)
             if response.status_code != 200:
                 logger.warning("Nintendo GraphQL returned HTTP %s for SKU %s", response.status_code, sku)
                 return None
             payload = response.json()
         except requests.RequestException as exc:
+            record_retailer_request(self.key, "saleability", error=exc.__class__.__name__)
             logger.warning("Nintendo GraphQL request failed for SKU %s: %s", sku, exc.__class__.__name__)
             return None
         except ValueError:
+            record_retailer_request(self.key, "saleability", response, "InvalidJSON")
             logger.warning("Nintendo GraphQL returned invalid JSON for SKU %s", sku)
             return None
         if not isinstance(payload, dict) or payload.get("errors"):
@@ -213,9 +233,11 @@ class BestBuyCanadaAdapter:
     def nearby_stores(self, postal_code):
         try:
             response = requests.get("https://www.bestbuy.ca/api/v3/json/locations", params={"lang": "en-CA", "postalCode": postal_code}, timeout=settings.NINTENDO_TIMEOUT_SECONDS, headers={"User-Agent": settings.STOCKBOT_USER_AGENT, "Accept": "application/json"})
+            record_retailer_request(self.key, "store-locations", response)
             response.raise_for_status()
             locations = response.json().get("locations", [])
         except (requests.RequestException, ValueError) as exc:
+            record_retailer_request(self.key, "store-locations", error=exc.__class__.__name__)
             raise AdapterError("Best Buy stores are currently unavailable.") from exc
         return [{"id": str(item["locationId"]), "name": item["name"], "city": item.get("city", ""), "region": item.get("region", ""), "distance": item.get("distance"), "pickup": "IN_STORE_PICKUP" in item.get("qpu", {}).get("pickupOptions", [])} for item in locations if item.get("locationId") and "IN_STORE_PICKUP" in item.get("qpu", {}).get("pickupOptions", [])]
 
@@ -225,7 +247,9 @@ class BestBuyCanadaAdapter:
         try:
             product_response = requests.get(f"https://www.bestbuy.ca/api/v2/json/product/{sku}", timeout=settings.NINTENDO_TIMEOUT_SECONDS, headers=headers)
         except requests.RequestException as exc:
+            record_retailer_request(self.key, "product", error=exc.__class__.__name__)
             raise AdapterError(f"Network error: {exc.__class__.__name__}") from exc
+        record_retailer_request(self.key, "product", product_response)
         if product_response.status_code in {401, 403, 429}:
             raise AdapterError("Retailer access is currently blocked.")
         if product_response.status_code != 200:
@@ -240,10 +264,12 @@ class BestBuyCanadaAdapter:
         if fulfillment in {"pickup", "either"}:
             try:
                 pickup_response = requests.get("https://www.bestbuy.ca/ecomm-api/availability/products", params={"accept": "application/vnd.bestbuy.standardproduct.v1+json", "accept-language": "en-CA", "locations": "|".join(location_keys or []), "postalCode": postal_code, "skus": sku}, timeout=settings.NINTENDO_TIMEOUT_SECONDS, headers=headers)
+                record_retailer_request(self.key, "pickup-availability", pickup_response)
                 pickup_response.raise_for_status()
                 pickup_locations = pickup_response.json()["availabilities"][0]["pickup"]["locations"]
                 pickup_available = any(item.get("locationKey") in (location_keys or []) and item.get("hasInventory") and item.get("isReservable") for item in pickup_locations)
             except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as exc:
+                record_retailer_request(self.key, "pickup-availability", error=exc.__class__.__name__)
                 raise AdapterError("Best Buy pickup availability is currently unavailable.") from exc
         in_stock = pickup_available if fulfillment == "pickup" else shipping_available or pickup_available
         image = product.get("highResImage") or product.get("thumbnailImage") or ""
@@ -330,6 +356,7 @@ class AppleCanadaAdapter:
         }
         try:
             response = requests.get("https://www.apple.com/ca/shop/delivery-message", params=params, timeout=settings.NINTENDO_TIMEOUT_SECONDS, headers=headers)
+            record_retailer_request(self.key, "delivery-availability", response)
             if response.status_code in {403, 429, 541}:
                 detail = response.text[:10000]
                 logger.warning("Apple delivery request blocked: HTTP %s; raw response: %s", response.status_code, detail or "<empty>")
@@ -344,6 +371,7 @@ class AppleCanadaAdapter:
         except AdapterError:
             raise
         except (requests.RequestException, ValueError, KeyError, StopIteration, TypeError) as exc:
+            record_retailer_request(self.key, "delivery-availability", error=exc.__class__.__name__)
             raise AdapterError("Apple delivery availability is currently unavailable.") from exc
         return any(isinstance(option, dict) for option in delivery_options)
 
@@ -363,6 +391,7 @@ class AppleCanadaAdapter:
         }
         try:
             response = requests.get("https://www.apple.com/ca/shop/retail/pickup-message", params=params, timeout=settings.NINTENDO_TIMEOUT_SECONDS, headers=headers)
+            record_retailer_request(self.key, "pickup-availability", response)
             if response.status_code in {403, 429, 541}:
                 detail = response.text[:10000]
                 logger.warning("Apple fulfillment request blocked: HTTP %s; raw response: %s", response.status_code, detail or "<empty>")
@@ -375,6 +404,7 @@ class AppleCanadaAdapter:
         except AdapterError:
             raise
         except (requests.RequestException, ValueError, KeyError, StopIteration, TypeError) as exc:
+            record_retailer_request(self.key, "pickup-availability", error=exc.__class__.__name__)
             raise AdapterError("Apple fulfillment is currently unavailable.") from exc
 
     def _stores(self, body):

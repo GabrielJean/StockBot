@@ -12,7 +12,7 @@ from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
-from .models import DiscordWebhook, Monitor, Product, SystemState, User, Validation
+from .models import DiscordWebhook, Monitor, Product, RetailerRequestLog, SystemState, User, Validation
 from .services import AdapterError, encrypt, get_adapter_for_url, masked_url, post_discord
 
 
@@ -46,13 +46,17 @@ def serialize_webhook(item):
 def serialize_monitor(item):
     product = item.product
     status = item.availability if item.availability != "unknown" else product.availability
-    return {"id": item.id, "active": item.active, "webhookId": item.webhook_id, "webhookName": item.webhook.name, "fulfillment": item.fulfillment, "locationKeys": item.location_keys, "checkIntervalSeconds": item.check_interval_seconds, "lastAvailableAt": item.last_available_at, "product": {"id": product.id, "title": product.title, "url": product.canonical_url, "imageUrl": product.image_url, "price": product.price, "availability": status, "lastCheckedAt": item.last_checked_at or product.last_checked_at, "lastError": item.last_error or product.last_error}}
+    return {"id": item.id, "active": item.active, "webhookId": item.webhook_id, "webhookName": item.webhook.name, "fulfillment": item.fulfillment, "locationKeys": item.location_keys, "checkIntervalSeconds": item.check_interval_seconds, "lastAvailableAt": item.last_available_at, "product": {"id": product.id, "retailer": product.retailer, "title": product.title, "url": product.canonical_url, "imageUrl": product.image_url, "price": product.price, "availability": status, "lastCheckedAt": item.last_checked_at or product.last_checked_at, "lastError": item.last_error or product.last_error}}
 
 
 def serialize_staff_monitor(item):
     data = serialize_monitor(item)
     data["owner"] = {"id": item.owner_id, "email": item.owner.email, "displayName": item.owner.display_name}
     return data
+
+
+def serialize_request_log(item):
+    return {"id": item.id, "retailer": item.retailer, "endpoint": item.endpoint, "httpStatus": item.http_status, "error": item.error, "createdAt": item.created_at}
 
 
 @require_http_methods(["GET"])
@@ -221,6 +225,14 @@ def api_collection(request, resource):
             return error("Staff access required.", 403)
         monitors = Monitor.objects.select_related("owner", "product", "webhook").order_by("owner__email", "-created_at")
         return result({"monitors": [serialize_staff_monitor(item) for item in monitors]})
+    if resource == "staff-request-logs" and request.method == "GET":
+        if not request.user.is_staff:
+            return error("Staff access required.", 403)
+        logs = RetailerRequestLog.objects.all()
+        retailer = request.GET.get("retailer", "")
+        if retailer:
+            logs = logs.filter(retailer=retailer)
+        return result({"logs": [serialize_request_log(item) for item in logs.order_by("-created_at")[:100]]})
     return error("Resource not found.", 404)
 
 

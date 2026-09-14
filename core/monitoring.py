@@ -7,7 +7,7 @@ from django.db import OperationalError, transaction
 from django.db.models import F, Q
 from django.utils import timezone
 
-from .models import CheckResult, Monitor, NotificationDelivery, Product, SystemState
+from .models import CheckResult, Monitor, NotificationDelivery, Product, RetailerRequestLog, SystemState
 from .services import AdapterError, get_adapter_for_retailer, post_discord
 
 
@@ -43,6 +43,7 @@ def check_due_products():
             # One corrupted product or unexpected database failure must not stop the batch.
             logger.exception("Unhandled monitor check failure for product %s", product.id)
     CheckResult.objects.filter(checked_at__lt=now - timedelta(days=30)).delete()
+    RetailerRequestLog.objects.filter(created_at__lt=now - timedelta(days=30)).delete()
     SystemState.objects.filter(pk=1).update(scheduler_heartbeat=timezone.now(), scheduler_completed_at=timezone.now())
 
 

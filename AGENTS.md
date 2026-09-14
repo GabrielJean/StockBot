@@ -71,6 +71,7 @@ Do not commit generated `core/static/`, `frontend/node_modules/`, SQLite databas
 - `check(product, postal_code="", fulfillment="shipping", location_keys=None)` is called by the scheduler. It must return `ProductSnapshot` for the exact product and monitor fulfillment settings.
 - `ProductSnapshot` fields are `canonical_url`, `title`, `image_url`, `price`, `availability`, and optional `external_id`. Keep title values suitable for the `Product.title` length limit and ensure a known availability value is returned.
 - Raise `AdapterError` for expected request, response, and parsing failures. Keep messages safe to show in the UI and do not include secrets, full webhook URLs, cookies, or large raw retailer responses.
+- Record each retailer request through `record_retailer_request()` so staff can diagnose store blocks and failures. Persist only retailer key, endpoint category, HTTP status, error class, and timestamp; never retain URLs with queries, postal codes, headers, cookies, request bodies, or raw responses.
 - Set `timeout=settings.NINTENDO_TIMEOUT_SECONDS` and send the transparent `settings.STOCKBOT_USER_AGENT` for every retailer request. Add an appropriate `Accept` and `Accept-Language: en-CA` header when the retailer expects them.
 - Treat HTTP `401`, `403`, and `429`, CAPTCHA-like payloads, or explicit retailer access denials as blocked. Do not silently retry in the adapter and do not interpret access failure as stock availability.
 

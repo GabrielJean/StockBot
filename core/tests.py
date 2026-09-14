@@ -5,7 +5,7 @@ from django.test import Client, TestCase, override_settings
 from django.db import OperationalError, connection
 from django.utils import timezone
 
-from .models import DiscordWebhook, Monitor, NotificationDelivery, Product, SystemState, User, Validation
+from .models import DiscordWebhook, Monitor, NotificationDelivery, Product, RetailerRequestLog, SystemState, User, Validation
 from .monitoring import check_due_products, check_monitor
 from .services import AppleCanadaAdapter, AdapterError, BestBuyCanadaAdapter, NintendoCanadaAdapter, ProductSnapshot, decrypt, encrypt
 
@@ -146,11 +146,29 @@ class AccountAndMonitorTests(TestCase):
         response = self.client.get("/api/v1/staff-monitors/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["monitors"][0]["owner"]["email"], owner.email)
+        self.assertEqual(response.json()["monitors"][0]["product"]["retailer"], "nintendo_ca")
         self.assertEqual(self.client.patch(f"/api/v1/staff-monitors/{monitor.id}/", data={"active": False}, content_type="application/json").status_code, 200)
         monitor.refresh_from_db()
         self.assertFalse(monitor.active)
         self.assertEqual(self.client.delete(f"/api/v1/staff-monitors/{monitor.id}/").status_code, 200)
         self.assertFalse(Monitor.objects.filter(id=monitor.id).exists())
+
+    def test_only_staff_can_view_sanitized_retailer_request_logs(self):
+        member = User.objects.create_user(email="member@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        staff = User.objects.create_user(email="staff@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True, is_staff=True)
+        RetailerRequestLog.objects.create(retailer="nintendo_ca", endpoint="saleability", http_status=429, error="HTTPError")
+
+        self.client.force_login(member)
+        self.assertEqual(self.client.get("/api/v1/staff-request-logs/").status_code, 403)
+
+        self.client.force_login(staff)
+        response = self.client.get("/api/v1/staff-request-logs/")
+        self.assertEqual(response.status_code, 200)
+        log = response.json()["logs"][0]
+        self.assertEqual(log["retailer"], "nintendo_ca")
+        self.assertEqual(log["endpoint"], "saleability")
+        self.assertEqual(log["httpStatus"], 429)
+        self.assertEqual(log["error"], "HTTPError")
 
     def test_available_check_records_monitor_availability_time(self):
         owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
@@ -320,6 +338,9 @@ class NintendoAdapterTests(TestCase):
         self.assertEqual(headers["locale"], "en-CA")
         self.assertEqual(headers["Origin"], "https://www.nintendo.com")
         self.assertEqual(headers["x-nintendo-graph"], "true")
+        log = RetailerRequestLog.objects.get(retailer="nintendo_ca", endpoint="saleability")
+        self.assertEqual(log.http_status, 200)
+        self.assertEqual(log.error, "")
 
     def test_graphql_metadata_is_preferred_without_a_page_request(self):
         graph_response = Mock(
