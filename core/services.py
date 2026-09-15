@@ -22,6 +22,16 @@ class AdapterError(Exception):
     pass
 
 
+def raise_if_blocked(response, retailer, blocked_statuses=(401, 403, 429)):
+    status = getattr(response, "status_code", None)
+    text = str(getattr(response, "text", "")).lower()
+    denied_markers = ("captcha", "access denied", "accessdenied", "automated access")
+    if status in blocked_statuses or any(marker in text for marker in denied_markers):
+        logger.warning("%s access blocked: HTTP %s", retailer, status or "unknown")
+        detail = f" (HTTP {status})" if status else ""
+        raise AdapterError(f"{retailer} access is currently blocked{detail}.")
+
+
 def record_retailer_request(retailer, endpoint, response=None, error=""):
     """Persist a compact diagnostic record without retaining sensitive request data."""
     try:
@@ -119,8 +129,7 @@ class NintendoCanadaAdapter:
             record_retailer_request(self.key, "product-page", error=exc.__class__.__name__)
             raise AdapterError(f"Network error: {exc.__class__.__name__}") from exc
         record_retailer_request(self.key, "product-page", response)
-        if response.status_code in {401, 403, 429}:
-            raise AdapterError("Retailer access is currently blocked.")
+        raise_if_blocked(response, "Nintendo Canada")
         if response.status_code != 200:
             raise AdapterError(f"Retailer returned HTTP {response.status_code}.")
         soup = BeautifulSoup(response.text, "html.parser")
@@ -145,6 +154,8 @@ class NintendoCanadaAdapter:
                     price = f"${offers['price']} {currency}"
         title = title or (soup.select_one("meta[property='og:title']") or {}).get("content", "")
         image = image or (soup.select_one("meta[property='og:image']") or {}).get("content", "")
+        title = str(title or "")
+        image = str(image or "")
         if not title:
             raise AdapterError("The page did not contain a recognizable product.")
         return ProductSnapshot(url, title[:255], image or "", price, availability, sku or "")
@@ -175,6 +186,7 @@ class NintendoCanadaAdapter:
         try:
             response = requests.get(self.product_endpoint, params=params, timeout=settings.NINTENDO_TIMEOUT_SECONDS, headers=headers)
             record_retailer_request(self.key, "saleability", response)
+            raise_if_blocked(response, "Nintendo Canada")
             if response.status_code != 200:
                 logger.warning("Nintendo GraphQL returned HTTP %s for SKU %s", response.status_code, sku)
                 return None
@@ -234,9 +246,13 @@ class BestBuyCanadaAdapter:
         try:
             response = requests.get("https://www.bestbuy.ca/api/v3/json/locations", params={"lang": "en-CA", "postalCode": postal_code}, timeout=settings.NINTENDO_TIMEOUT_SECONDS, headers={"User-Agent": settings.STOCKBOT_USER_AGENT, "Accept": "application/json"})
             record_retailer_request(self.key, "store-locations", response)
+            raise_if_blocked(response, "Best Buy Canada")
             response.raise_for_status()
-            locations = response.json().get("locations", [])
-        except (requests.RequestException, ValueError) as exc:
+            payload = response.json()
+            locations = payload.get("locations", []) if isinstance(payload, dict) else []
+            if not isinstance(locations, list):
+                raise ValueError("locations")
+        except (requests.RequestException, ValueError, TypeError) as exc:
             record_retailer_request(self.key, "store-locations", error=exc.__class__.__name__)
             raise AdapterError("Best Buy stores are currently unavailable.") from exc
         return [{"id": str(item["locationId"]), "name": item["name"], "city": item.get("city", ""), "region": item.get("region", ""), "distance": item.get("distance"), "pickup": "IN_STORE_PICKUP" in item.get("qpu", {}).get("pickupOptions", [])} for item in locations if item.get("locationId") and "IN_STORE_PICKUP" in item.get("qpu", {}).get("pickupOptions", [])]
@@ -250,21 +266,24 @@ class BestBuyCanadaAdapter:
             record_retailer_request(self.key, "product", error=exc.__class__.__name__)
             raise AdapterError(f"Network error: {exc.__class__.__name__}") from exc
         record_retailer_request(self.key, "product", product_response)
-        if product_response.status_code in {401, 403, 429}:
-            raise AdapterError("Retailer access is currently blocked.")
+        raise_if_blocked(product_response, "Best Buy Canada")
         if product_response.status_code != 200:
             raise AdapterError("Best Buy product details are currently unavailable.")
         try:
             product = product_response.json()
         except ValueError as exc:
             raise AdapterError("Best Buy returned unexpected product details.") from exc
+        if not isinstance(product, dict):
+            raise AdapterError("Best Buy returned unexpected product details.")
         product_availability = product.get("availability", {})
+        product_availability = product_availability if isinstance(product_availability, dict) else {}
         shipping_available = product_availability.get("isAvailableOnline") is True and str(product_availability.get("onlineAvailability", "")).lower() == "instock"
         pickup_available = False
         if fulfillment in {"pickup", "either"}:
             try:
                 pickup_response = requests.get("https://www.bestbuy.ca/ecomm-api/availability/products", params={"accept": "application/vnd.bestbuy.standardproduct.v1+json", "accept-language": "en-CA", "locations": "|".join(location_keys or []), "postalCode": postal_code, "skus": sku}, timeout=settings.NINTENDO_TIMEOUT_SECONDS, headers=headers)
                 record_retailer_request(self.key, "pickup-availability", pickup_response)
+                raise_if_blocked(pickup_response, "Best Buy Canada")
                 pickup_response.raise_for_status()
                 pickup_locations = pickup_response.json()["availabilities"][0]["pickup"]["locations"]
                 pickup_available = any(item.get("locationKey") in (location_keys or []) and item.get("hasInventory") and item.get("isReservable") for item in pickup_locations)
@@ -273,7 +292,10 @@ class BestBuyCanadaAdapter:
                 raise AdapterError("Best Buy pickup availability is currently unavailable.") from exc
         in_stock = pickup_available if fulfillment == "pickup" else shipping_available or pickup_available
         image = product.get("highResImage") or product.get("thumbnailImage") or ""
-        return ProductSnapshot(url, product.get("name", "")[:255], image, f"${product.get('salePrice', product.get('regularPrice', ''))} CAD", "available" if in_stock else "unavailable")
+        title = product.get("name", "")
+        if not isinstance(title, str):
+            raise AdapterError("Best Buy returned unexpected product details.")
+        return ProductSnapshot(url, title[:255], str(image), f"${product.get('salePrice', product.get('regularPrice', ''))} CAD", "available" if in_stock else "unavailable")
 
 
 class AppleCanadaAdapter:
@@ -357,10 +379,7 @@ class AppleCanadaAdapter:
         try:
             response = requests.get("https://www.apple.com/ca/shop/delivery-message", params=params, timeout=settings.NINTENDO_TIMEOUT_SECONDS, headers=headers)
             record_retailer_request(self.key, "delivery-availability", response)
-            if response.status_code in {403, 429, 541}:
-                detail = response.text[:10000]
-                logger.warning("Apple delivery request blocked: HTTP %s; raw response: %s", response.status_code, detail or "<empty>")
-                raise AdapterError(f"Apple blocked this automated delivery request (HTTP {response.status_code}).")
+            raise_if_blocked(response, "Apple", blocked_statuses=(401, 403, 429, 541))
             response.raise_for_status()
             messages = response.json()["body"]["content"]["deliveryMessage"]
             message_sets = next(value for key, value in messages.items() if part in key.upper() and isinstance(value, dict))
@@ -392,10 +411,7 @@ class AppleCanadaAdapter:
         try:
             response = requests.get("https://www.apple.com/ca/shop/retail/pickup-message", params=params, timeout=settings.NINTENDO_TIMEOUT_SECONDS, headers=headers)
             record_retailer_request(self.key, "pickup-availability", response)
-            if response.status_code in {403, 429, 541}:
-                detail = response.text[:10000]
-                logger.warning("Apple fulfillment request blocked: HTTP %s; raw response: %s", response.status_code, detail or "<empty>")
-                raise AdapterError(f"Apple blocked this automated fulfillment request (HTTP {response.status_code}).")
+            raise_if_blocked(response, "Apple", blocked_statuses=(401, 403, 429, 541))
             response.raise_for_status()
             body = response.json()["body"]
             if not isinstance(body, dict):

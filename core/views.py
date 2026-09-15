@@ -21,9 +21,10 @@ CHECK_INTERVALS = {30, 60, 300, 900, 1800, 3600, 86400}
 
 def payload(request):
     try:
-        return json.loads(request.body or "{}")
+        data = json.loads(request.body or "{}")
     except json.JSONDecodeError:
-        return {}
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def result(data=None, status=200):
@@ -97,9 +98,14 @@ def current_user(request):
 @require_http_methods(["GET", "POST"])
 def api_collection(request, resource):
     data = payload(request)
+    if data is None:
+        return error("Request body must be a JSON object.")
     if resource == "register" and request.method == "POST":
-        email = data.get("email", "").strip().lower()
+        email_value = data.get("email", "")
         password = data.get("password", "")
+        if not isinstance(email_value, str) or not isinstance(password, str):
+            return error("Email and password must be strings.")
+        email = email_value.strip().lower()
         if not email or not password:
             return error("Email and password are required.")
         try:
@@ -120,9 +126,13 @@ def api_collection(request, resource):
             return error("An account with that email already exists.", 409)
         return result({"created": True, "approved": first, "message": "Your administrator account is ready." if first else "Your account is pending administrator approval."}, 201)
     if resource == "login" and request.method == "POST":
-        user = authenticate(request, email=data.get("email", "").strip().lower(), password=data.get("password", ""))
+        email = data.get("email", "")
+        password = data.get("password", "")
+        if not isinstance(email, str) or not isinstance(password, str):
+            return error("Email and password must be strings.")
+        user = authenticate(request, email=email.strip().lower(), password=password)
         if not user:
-            pending = User.objects.filter(email=data.get("email", "").strip().lower(), status=User.Status.PENDING).exists()
+            pending = User.objects.filter(email=email.strip().lower(), status=User.Status.PENDING).exists()
             return error("Your account is awaiting administrator approval." if pending else "Invalid email or password.", 403)
         login(request, user)
         return result({"user": current_user(request), "csrfToken": get_token(request)})
@@ -136,7 +146,10 @@ def api_collection(request, resource):
     if resource == "stores" and request.method == "GET":
         return result({"stores": [{"key": "nintendo_ca", "name": "Nintendo Canada", "enabled": True, "description": "Shipping availability"}, {"key": "bestbuy_ca", "name": "Best Buy Canada", "enabled": True, "description": "Shipping and selected-store pickup"}, {"key": "apple_ca", "name": "Apple Canada", "enabled": True, "description": "Shipping and selected Apple Store pickup"}, {"key": "walmart_ca", "name": "Walmart Canada", "enabled": False}, {"key": "amazon_ca", "name": "Amazon Canada", "enabled": False}]})
     if resource in {"bestbuy-stores", "apple-stores"} and request.method == "POST":
-        postal_code = re.sub(r"\s+", "", data.get("postalCode", "").upper())
+        postal_value = data.get("postalCode", "")
+        if not isinstance(postal_value, str):
+            return error("Enter a valid Canadian postal code.")
+        postal_code = re.sub(r"\s+", "", postal_value.upper())
         if not re.fullmatch(r"[ABCEGHJKLMNPRSTVXY]\d[ABCEGHJKLMNPRSTVWXYZ]\d[ABCEGHJKLMNPRSTVWXYZ]\d", postal_code):
             return error("Enter a valid Canadian postal code.")
         try:
@@ -144,7 +157,10 @@ def api_collection(request, resource):
                 source = get_adapter_for_url("https://www.bestbuy.ca/en-ca/product/example/1")
                 stores = source.nearby_stores(postal_code)
             else:
-                part = data.get("applePartNumber", "").strip().upper()
+                part_value = data.get("applePartNumber", "")
+                if not isinstance(part_value, str):
+                    return error("Enter the Canada Apple Order No. before finding stores.")
+                part = part_value.strip().upper()
                 if not part:
                     return error("Enter the Canada Apple Order No. before finding stores.")
                 source = get_adapter_for_url("https://www.apple.com/ca/shop/")
@@ -156,7 +172,10 @@ def api_collection(request, resource):
         if request.method == "GET":
             return result({"webhooks": [serialize_webhook(item) for item in request.user.webhooks.all()]})
         if request.method == "POST":
-            url = data.get("url", "").strip()
+            url_value = data.get("url", "")
+            if not isinstance(url_value, str):
+                return error("Enter a valid Discord webhook URL.")
+            url = url_value.strip()
             if not url.startswith("https://discord.com/api/webhooks/") and not url.startswith("https://discordapp.com/api/webhooks/"):
                 return error("Enter a valid Discord webhook URL.")
             try:
@@ -167,8 +186,16 @@ def api_collection(request, resource):
     if resource == "monitors" and request.method == "GET":
         return result({"monitors": [serialize_monitor(item) for item in request.user.monitors.select_related("product", "webhook").order_by("-created_at")]})
     if resource == "validate" and request.method == "POST":
-        source = get_adapter_for_url(data.get("url", ""))
-        postal_code = re.sub(r"\s+", "", data.get("postalCode", "").upper())
+        raw_url = data.get("url", "")
+        postal_value = data.get("postalCode", "")
+        external_id_value = data.get("applePartNumber", "")
+        location_keys = data.get("locationKeys", [])
+        if not isinstance(raw_url, str) or not isinstance(postal_value, str) or not isinstance(external_id_value, str):
+            return error("Product details must use text values.")
+        if not isinstance(location_keys, list) or len(location_keys) > 25 or any(not isinstance(key, str) or not key.strip() for key in location_keys):
+            return error("Choose up to 25 valid store locations.")
+        source = get_adapter_for_url(raw_url)
+        postal_code = re.sub(r"\s+", "", postal_value.upper())
         if postal_code and not re.fullmatch(r"[ABCEGHJKLMNPRSTVXY]\d[ABCEGHJKLMNPRSTVWXYZ]\d[ABCEGHJKLMNPRSTVWXYZ]\d", postal_code):
             return error("Enter a valid Canadian postal code.")
         if not source:
@@ -177,8 +204,8 @@ def api_collection(request, resource):
         check_interval_seconds = data.get("checkIntervalSeconds", 60)
         if isinstance(check_interval_seconds, bool) or check_interval_seconds not in CHECK_INTERVALS:
             return error("Choose a valid check interval.")
-        location_keys = [str(key)[:64] for key in data.get("locationKeys", []) if str(key).strip()]
-        external_id = data.get("applePartNumber", "").strip().upper()
+        location_keys = [key.strip()[:64] for key in location_keys]
+        external_id = external_id_value.strip().upper()
         if fulfillment not in {"shipping", "pickup", "either"}:
             return error("Choose shipping, pickup, or either fulfillment.")
         if source.key not in {"bestbuy_ca", "apple_ca"}:
@@ -190,31 +217,32 @@ def api_collection(request, resource):
         if source.key == "apple_ca" and fulfillment in {"pickup", "either"} and not postal_code:
             return error("Apple fulfillment requires a Canadian postal code.")
         try:
-            snapshot = source.validate(data.get("url", ""), postal_code, fulfillment, location_keys, external_id)
+            snapshot = source.validate(raw_url, postal_code, fulfillment, location_keys, external_id)
         except AdapterError as exc:
             return error(str(exc), 422)
         validation = Validation.objects.create(owner=request.user, canonical_url=snapshot.canonical_url, title=snapshot.title, image_url=snapshot.image_url, price=snapshot.price, availability=snapshot.availability, postal_code=postal_code, fulfillment=fulfillment, location_keys=location_keys, check_interval_seconds=check_interval_seconds, external_id=snapshot.external_id, expires_at=timezone.now() + timedelta(minutes=15))
         return result({"validation": {"id": validation.id, "title": validation.title, "url": validation.canonical_url, "imageUrl": validation.image_url, "price": validation.price, "availability": validation.availability}})
     if resource == "confirm-monitor" and request.method == "POST":
-        validation = Validation.objects.filter(id=data.get("validationId"), owner=request.user, expires_at__gt=timezone.now()).first()
-        webhook = request.user.webhooks.filter(id=data.get("webhookId"), enabled=True).first()
-        if not validation or not webhook:
-            return error("Choose a current validation and enabled webhook.")
-        source = get_adapter_for_url(validation.canonical_url)
-        if not source:
-            return error("This monitor validation has an unsupported product URL.", 422)
-        product, _ = Product.objects.update_or_create(canonical_url=validation.canonical_url, defaults={"retailer": source.key, "external_id": validation.external_id, "title": validation.title, "image_url": validation.image_url, "price": validation.price, "availability": validation.availability})
-        monitor, created = Monitor.objects.get_or_create(owner=request.user, product=product, defaults={"webhook": webhook, "postal_code": validation.postal_code, "fulfillment": validation.fulfillment, "location_keys": validation.location_keys, "check_interval_seconds": validation.check_interval_seconds})
-        if not created:
-            monitor.webhook = webhook
-            monitor.active = True
-            monitor.postal_code = validation.postal_code
-            monitor.fulfillment = validation.fulfillment
-            monitor.location_keys = validation.location_keys
-            monitor.check_interval_seconds = validation.check_interval_seconds
-            monitor.next_check_at = None
-            monitor.save(update_fields=["webhook", "active", "postal_code", "fulfillment", "location_keys", "check_interval_seconds", "next_check_at", "updated_at"])
-        validation.delete()
+        with transaction.atomic():
+            validation = Validation.objects.select_for_update().filter(id=data.get("validationId"), owner=request.user, expires_at__gt=timezone.now()).first()
+            webhook = request.user.webhooks.select_for_update().filter(id=data.get("webhookId"), enabled=True).first()
+            if not validation or not webhook:
+                return error("Choose a current validation and enabled webhook.")
+            source = get_adapter_for_url(validation.canonical_url)
+            if not source:
+                return error("This monitor validation has an unsupported product URL.", 422)
+            product, _ = Product.objects.update_or_create(canonical_url=validation.canonical_url, defaults={"retailer": source.key, "external_id": validation.external_id, "title": validation.title, "image_url": validation.image_url, "price": validation.price, "availability": validation.availability})
+            monitor, created = Monitor.objects.get_or_create(owner=request.user, product=product, defaults={"webhook": webhook, "postal_code": validation.postal_code, "fulfillment": validation.fulfillment, "location_keys": validation.location_keys, "check_interval_seconds": validation.check_interval_seconds})
+            if not created:
+                monitor.webhook = webhook
+                monitor.active = True
+                monitor.postal_code = validation.postal_code
+                monitor.fulfillment = validation.fulfillment
+                monitor.location_keys = validation.location_keys
+                monitor.check_interval_seconds = validation.check_interval_seconds
+                monitor.next_check_at = None
+                monitor.save(update_fields=["webhook", "active", "postal_code", "fulfillment", "location_keys", "check_interval_seconds", "next_check_at", "updated_at"])
+            validation.delete()
         return result({"monitor": serialize_monitor(monitor)}, 201)
     if resource == "staff-users" and request.method == "GET":
         if not request.user.is_staff:
@@ -241,6 +269,8 @@ def api_item(request, resource, object_id):
     if not require_user(request):
         return error("Authentication required.", 401)
     data = payload(request)
+    if data is None:
+        return error("Request body must be a JSON object.")
     if resource == "monitors":
         item = request.user.monitors.filter(id=object_id).first()
         if not item:

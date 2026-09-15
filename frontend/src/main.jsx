@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 import "./layout.css";
@@ -25,7 +25,11 @@ const request = async (path, options = {}) => {
         error:
           "The server returned an unexpected response. Reload the page and try again.",
       };
-  if (!response.ok) throw new Error(body.error || "Request failed.");
+  if (!response.ok) {
+    const error = new Error(body.error || "Request failed.");
+    error.status = response.status;
+    throw error;
+  }
   return body;
 };
 const formatTime = (value) =>
@@ -207,7 +211,8 @@ function AddMonitor({ webhooks, onCreated }) {
     [preview, setPreview] = useState(null),
     [webhookId, setWebhookId] = useState(webhooks[0]?.id || ""),
     [message, setMessage] = useState(""),
-    [loading, setLoading] = useState(false);
+    [loading, setLoading] = useState(false),
+    [confirming, setConfirming] = useState(false);
   const isAppleUrl =
     selectedStore === "apple_ca" ||
     /^https?:\/\/(?:www\.)?apple\.com\/ca\/shop\//i.test(url.trim());
@@ -276,6 +281,9 @@ function AddMonitor({ webhooks, onCreated }) {
     });
     form.insertBefore(label, form.firstChild);
   }, []);
+  useEffect(() => {
+    setPreview(null);
+  }, [url, selectedStore, applePartNumber, postalCode, fulfillment, locationKeys, checkIntervalSeconds]);
   const findStores = async () => {
     setLoading(true);
     setMessage("");
@@ -321,6 +329,7 @@ function AddMonitor({ webhooks, onCreated }) {
     }
   };
   const confirm = async () => {
+    setConfirming(true);
     try {
       await request("confirm-monitor/", {
         method: "POST",
@@ -336,6 +345,8 @@ function AddMonitor({ webhooks, onCreated }) {
       setCheckIntervalSeconds(60);
     } catch (error) {
       setMessage(error.message);
+    } finally {
+      setConfirming(false);
     }
   };
   const toggleStore = (id) =>
@@ -559,8 +570,8 @@ function AddMonitor({ webhooks, onCreated }) {
               ))}
             </select>
           </div>
-          <button onClick={confirm} disabled={!webhookId}>
-            Start monitoring
+          <button onClick={confirm} disabled={!webhookId || confirming}>
+            {confirming ? "Starting..." : "Start monitoring"}
           </button>
         </div>
       )}
@@ -580,7 +591,7 @@ function Status({ value }) {
   );
 }
 
-function Dashboard({ user, logout }) {
+function Dashboard({ user, logout, onSessionExpired }) {
   const [monitors, setMonitors] = useState([]),
     [webhooks, setWebhooks] = useState([]),
     [view, setView] = useState("monitors"),
@@ -590,16 +601,31 @@ function Dashboard({ user, logout }) {
     [requestLogs, setRequestLogs] = useState([]),
     [requestLogRetailer, setRequestLogRetailer] = useState(""),
     [message, setMessage] = useState("");
+  const loadGeneration = useRef(0);
+  const loadController = useRef(null);
+  const handleError = (error) => {
+    if (error.name === "AbortError") return;
+    if (error.status === 401 || error.status === 403) {
+      onSessionExpired();
+      return;
+    }
+    setMessage(error.message || "The request could not be completed.");
+  };
   const load = async () => {
+    loadController.current?.abort();
+    const controller = new AbortController();
+    loadController.current = controller;
+    const generation = ++loadGeneration.current;
     try {
       const [m, w] = await Promise.all([
-        request("monitors/"),
-        request("webhooks/"),
+        request("monitors/", { signal: controller.signal }),
+        request("webhooks/", { signal: controller.signal }),
       ]);
+      if (generation !== loadGeneration.current) return;
       setMonitors(m.monitors);
       setWebhooks(w.webhooks);
     } catch (error) {
-      setMessage(error.message);
+      if (generation === loadGeneration.current) handleError(error);
     }
   };
   const loadUsers = async () => {
@@ -613,13 +639,16 @@ function Dashboard({ user, logout }) {
       setAdminMonitors(monitorData.monitors);
       setRequestLogs(requestLogData.logs);
     } catch (error) {
-      setMessage(error.message);
+      handleError(error);
     }
   };
   useEffect(() => {
     load();
     const refresh = window.setInterval(load, 30_000);
-    return () => window.clearInterval(refresh);
+    return () => {
+      window.clearInterval(refresh);
+      loadController.current?.abort();
+    };
   }, []);
   const addWebhook = async (e) => {
     e.preventDefault();
@@ -631,15 +660,19 @@ function Dashboard({ user, logout }) {
       setWebhookForm({ name: "", url: "" });
       load();
     } catch (error) {
-      setMessage(error.message);
+      handleError(error);
     }
   };
   const updateMonitor = async (id, changes) => {
-    await request(`monitors/${id}/`, {
-      method: "PATCH",
-      body: JSON.stringify(changes),
-    });
-    load();
+    try {
+      await request(`monitors/${id}/`, {
+        method: "PATCH",
+        body: JSON.stringify(changes),
+      });
+      load();
+    } catch (error) {
+      handleError(error);
+    }
   };
   const removeMonitor = async (id, title) => {
     if (!window.confirm(`Remove the monitor for ${title}?`)) return;
@@ -647,15 +680,19 @@ function Dashboard({ user, logout }) {
       await request(`monitors/${id}/`, { method: "DELETE" });
       setMonitors((current) => current.filter((monitor) => monitor.id !== id));
     } catch (error) {
-      setMessage(error.message);
+      handleError(error);
     }
   };
   const updateUser = async (id, action) => {
-    await request(`staff-users/${id}/`, {
-      method: "PATCH",
-      body: JSON.stringify({ action }),
-    });
-    loadUsers();
+    try {
+      await request(`staff-users/${id}/`, {
+        method: "PATCH",
+        body: JSON.stringify({ action }),
+      });
+      loadUsers();
+    } catch (error) {
+      handleError(error);
+    }
   };
   const updateAdminMonitor = async (id, active) => {
     try {
@@ -665,7 +702,7 @@ function Dashboard({ user, logout }) {
       });
       loadUsers();
     } catch (error) {
-      setMessage(error.message);
+      handleError(error);
     }
   };
   const removeAdminMonitor = async (id, title, owner) => {
@@ -674,7 +711,7 @@ function Dashboard({ user, logout }) {
       await request(`staff-monitors/${id}/`, { method: "DELETE" });
       setAdminMonitors((current) => current.filter((monitor) => monitor.id !== id));
     } catch (error) {
-      setMessage(error.message);
+      handleError(error);
     }
   };
   return (
@@ -717,7 +754,7 @@ function Dashboard({ user, logout }) {
         </div>
       </aside>
       <section className="content">
-        {message && <p className="notice">{message}</p>}
+        {message && <p className="notice" role="alert">{message}</p>}
         {view === "monitors" && (
           <>
             <header>
@@ -842,15 +879,19 @@ function Dashboard({ user, logout }) {
                       </p>
                     )}
                   </div>
-                  <button
+                    <button
                     onClick={async () => {
-                      const out = await request(`webhooks/${w.id}/`, {
-                        method: "POST",
-                        body: JSON.stringify({ action: "test" }),
-                      });
-                      setMessage(
-                        out.delivered ? "Test delivery sent." : out.error,
-                      );
+                      try {
+                        const out = await request(`webhooks/${w.id}/`, {
+                          method: "POST",
+                          body: JSON.stringify({ action: "test" }),
+                        });
+                        setMessage(
+                          out.delivered ? "Test delivery sent." : out.error,
+                        );
+                      } catch (error) {
+                        handleError(error);
+                      }
                     }}
                   >
                     Send test
@@ -955,22 +996,42 @@ function Dashboard({ user, logout }) {
 
 function App() {
   const [user, setUser] = useState(null),
-    [ready, setReady] = useState(false);
+    [ready, setReady] = useState(false),
+    [bootstrapError, setBootstrapError] = useState("");
+  const bootstrap = async () => {
+    setReady(false);
+    setBootstrapError("");
+    try {
+      const data = await request("");
+      csrf = data.csrfToken;
+      setUser(data.user);
+    } catch (error) {
+      csrf = "";
+      setBootstrapError(error.message || "Unable to connect to StockBot.");
+    } finally {
+      setReady(true);
+    }
+  };
   useEffect(() => {
-    request("")
-      .then((data) => {
-        csrf = data.csrfToken;
-        setUser(data.user);
-        setReady(true);
-      })
-      .catch(() => setReady(true));
+    bootstrap();
   }, []);
   if (!ready) return <div className="loading">Loading StockBot...</div>;
+  if (bootstrapError) {
+    return <main className="auth-shell"><section className="auth-card"><h1>Connection unavailable</h1><p className="notice" role="alert">{bootstrapError}</p><button onClick={bootstrap}>Retry connection</button></section></main>;
+  }
   return user ? (
     <Dashboard
       user={user}
       logout={async () => {
-        await request("logout/", { method: "POST" });
+        try {
+          await request("logout/", { method: "POST" });
+        } finally {
+          csrf = "";
+          setUser(null);
+        }
+      }}
+      onSessionExpired={() => {
+        csrf = "";
         setUser(null);
       }}
     />

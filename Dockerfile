@@ -11,7 +11,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DATABASE_PATH=/data/db.sqlite3 \
     DJANGO_DEBUG=false \
     ALLOWED_HOSTS=* \
-    CSRF_TRUSTED_ORIGINS=https://stockbot.docker-1.gwebs.ca \
     COOKIE_SECURE=true \
     SCHEDULER_ENABLED=true
 WORKDIR /app

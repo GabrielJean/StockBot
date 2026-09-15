@@ -6,7 +6,7 @@ from django.db import OperationalError, connection
 from django.utils import timezone
 
 from .models import DiscordWebhook, Monitor, NotificationDelivery, Product, RetailerRequestLog, SystemState, User, Validation
-from .monitoring import check_due_products, check_monitor
+from .monitoring import check_due_products, check_monitor, process_pending_deliveries
 from .services import AppleCanadaAdapter, AdapterError, BestBuyCanadaAdapter, NintendoCanadaAdapter, ProductSnapshot, decrypt, encrypt
 
 
@@ -229,6 +229,41 @@ class AccountAndMonitorTests(TestCase):
         self.assertEqual(transaction_state, [outer_transaction_state])
         self.assertEqual(NotificationDelivery.objects.filter(monitor=monitor).count(), 1)
 
+    def test_failed_monitor_delivery_is_retried_from_the_outbox(self):
+        owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        product = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/example", title="Example")
+        webhook = DiscordWebhook.objects.create(owner=owner, name="Discord", encrypted_url=encrypt("https://discord.com/api/webhooks/1/token"))
+        monitor = Monitor.objects.create(owner=owner, product=product, webhook=webhook)
+        source = Mock()
+        source.check.return_value = ProductSnapshot(product.canonical_url, product.title, availability=Product.Availability.AVAILABLE)
+
+        with patch("core.monitoring.post_discord", return_value=(False, "ConnectionError")):
+            check_monitor(monitor, product, source, timezone.now())
+
+        delivery = NotificationDelivery.objects.get(monitor=monitor)
+        self.assertFalse(delivery.delivered)
+        self.assertEqual(delivery.attempts, 1)
+        self.assertIsNotNone(delivery.next_attempt_at)
+        delivery.next_attempt_at = timezone.now() - timedelta(seconds=1)
+        delivery.save(update_fields=["next_attempt_at"])
+
+        with patch("core.monitoring.post_discord", return_value=(True, "")):
+            process_pending_deliveries()
+
+        delivery.refresh_from_db()
+        self.assertTrue(delivery.delivered)
+        self.assertEqual(delivery.attempts, 2)
+        self.assertIsNotNone(delivery.completed_at)
+
+    def test_api_rejects_non_object_json(self):
+        owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        self.client.force_login(owner)
+
+        response = self.client.post("/api/v1/validate/", data="[]", content_type="application/json")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Request body must be a JSON object.")
+
     def test_unexpected_monitor_check_failure_records_an_error(self):
         owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
         product = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/example", title="Example")
@@ -276,6 +311,20 @@ class AccountAndMonitorTests(TestCase):
         state = SystemState.objects.get(pk=1)
         self.assertIsNotNone(state.scheduler_started_at)
         self.assertIsNotNone(state.scheduler_completed_at)
+
+    def test_due_product_with_multiple_monitors_is_checked_once_per_pass(self):
+        first_owner = User.objects.create_user(email="first@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        second_owner = User.objects.create_user(email="second@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        product = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/example", title="Example")
+        first_webhook = DiscordWebhook.objects.create(owner=first_owner, name="Discord", encrypted_url=encrypt("https://discord.com/api/webhooks/1/token"))
+        second_webhook = DiscordWebhook.objects.create(owner=second_owner, name="Discord", encrypted_url=encrypt("https://discord.com/api/webhooks/2/token"))
+        Monitor.objects.create(owner=first_owner, product=product, webhook=first_webhook)
+        Monitor.objects.create(owner=second_owner, product=product, webhook=second_webhook)
+
+        with patch("core.monitoring.check_product") as check_product:
+            check_due_products()
+
+        check_product.assert_called_once_with(product.id)
 
     @override_settings(SCHEDULER_RUN_BUDGET_SECONDS=25)
     def test_due_product_checks_stop_at_scheduler_pass_budget(self):
@@ -435,6 +484,12 @@ class BestBuyAdapterTests(TestCase):
         with patch("core.services.requests.get", return_value=product_response):
             snapshot = BestBuyCanadaAdapter().validate("https://www.bestbuy.ca/en-ca/product/nintendo-switch-2-console/19296507", "J9H0H8")
         self.assertEqual(snapshot.availability, "unavailable")
+
+    def test_best_buy_access_denial_is_reported_as_blocked(self):
+        response = Mock(status_code=429, text="Too many requests")
+        with patch("core.services.requests.get", return_value=response):
+            with self.assertRaisesRegex(AdapterError, "blocked"):
+                BestBuyCanadaAdapter().validate("https://www.bestbuy.ca/en-ca/product/nintendo-switch-2-console/19296507")
 
     def test_best_buy_selected_pickup_store_is_available(self):
         product_response = Mock(status_code=200, json=lambda: {"name": "Nintendo Switch 2 Console", "availability": {"isAvailableOnline": False, "onlineAvailability": "OutOfStock"}})
@@ -607,4 +662,4 @@ class AppleAdapterTests(TestCase):
         with patch("core.services.requests.get", return_value=response), self.assertLogs("core.services", level="WARNING") as logs:
             with self.assertRaisesRegex(AdapterError, "HTTP 403"):
                 AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "A1A1A1", external_id="MG854VC/A")
-        self.assertEqual(logs.output, ["WARNING:core.services:Apple delivery request blocked: HTTP 403; raw response: Access Denied"])
+        self.assertEqual(logs.output, ["WARNING:core.services:Apple access blocked: HTTP 403"])

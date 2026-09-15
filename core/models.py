@@ -141,7 +141,17 @@ class RetailerRequestLog(models.Model):
 
 class NotificationDelivery(models.Model):
     monitor = models.ForeignKey(Monitor, on_delete=models.CASCADE, related_name="deliveries")
+    webhook = models.ForeignKey(DiscordWebhook, null=True, blank=True, on_delete=models.SET_NULL, related_name="deliveries")
     event_type = models.CharField(max_length=32, default="restock")
+    title = models.CharField(max_length=255, blank=True)
+    url = models.URLField(blank=True)
+    price = models.CharField(max_length=32, blank=True)
     delivered = models.BooleanField(default=False)
     error = models.CharField(max_length=255, blank=True)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
     attempted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["delivered", "next_attempt_at"], name="core_deliv_deliver_34b586_idx")]
