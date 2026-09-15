@@ -39,6 +39,11 @@ const formatTime = (value) =>
         timeStyle: "short",
       }).format(new Date(value))
     : "Not checked yet";
+const formatLogTime = (value) =>
+  new Intl.DateTimeFormat("en-CA", {
+    dateStyle: "medium",
+    timeStyle: "medium",
+  }).format(new Date(value));
 const formatPostalCode = (value) => {
   const compact = value
     .toUpperCase()
@@ -1005,7 +1010,7 @@ function Dashboard({ user, logout, onSessionExpired, appVersion, stopImpersonati
                 <article key={log.id}>
                   <div>
                     <strong>{log.retailer.replace("_", " ")} · {log.endpoint}</strong>
-                    <p>{formatTime(log.createdAt)}</p>
+                    <p>{formatLogTime(log.createdAt)}</p>
                   </div>
                   <div className={log.error || (log.httpStatus && log.httpStatus >= 400) ? "warning" : ""}>
                     {log.httpStatus ? `HTTP ${log.httpStatus}` : "No HTTP response"}
