@@ -618,6 +618,8 @@ function Dashboard({ user, logout }) {
   };
   useEffect(() => {
     load();
+    const refresh = window.setInterval(load, 30_000);
+    return () => window.clearInterval(refresh);
   }, []);
   const addWebhook = async (e) => {
     e.preventDefault();

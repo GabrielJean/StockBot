@@ -13,6 +13,8 @@ from .services import AdapterError, get_adapter_for_retailer, post_discord
 
 logger = logging.getLogger(__name__)
 RETRY_INTERVAL_SECONDS = 300
+TRANSIENT_RETRY_MULTIPLIER = 2
+BLOCKED_RETRY_MULTIPLIER = 5
 
 
 def _retry_locked_database(operation, description):
@@ -26,8 +28,18 @@ def _retry_locked_database(operation, description):
             time.sleep(0.2 * (attempt + 1))
 
 
+def _next_check_at(monitor, now, succeeded, status):
+    if succeeded:
+        delay = monitor.check_interval_seconds
+    else:
+        multiplier = BLOCKED_RETRY_MULTIPLIER if status == Product.Availability.BLOCKED else TRANSIENT_RETRY_MULTIPLIER
+        delay = min(monitor.check_interval_seconds * multiplier, RETRY_INTERVAL_SECONDS)
+    return now + timedelta(seconds=delay)
+
+
 def check_due_products():
     now = timezone.now()
+    deadline = time.monotonic() + settings.SCHEDULER_RUN_BUDGET_SECONDS
     _retry_locked_database(
         lambda: SystemState.objects.update_or_create(
             pk=1,
@@ -37,14 +49,20 @@ def check_due_products():
     )
     products = Product.objects.filter(Q(monitors__active=True) & (Q(monitors__next_check_at__isnull=True) | Q(monitors__next_check_at__lte=now))).distinct().order_by(F("monitors__next_check_at").asc(nulls_first=True), "id")
     for product in products[:100]:
+        if time.monotonic() >= deadline:
+            logger.warning("Scheduler pass reached its %s-second budget; remaining due products will run next pass", settings.SCHEDULER_RUN_BUDGET_SECONDS)
+            break
         try:
             check_product(product.id)
         except Exception:
             # One corrupted product or unexpected database failure must not stop the batch.
             logger.exception("Unhandled monitor check failure for product %s", product.id)
-    CheckResult.objects.filter(checked_at__lt=now - timedelta(days=30)).delete()
-    RetailerRequestLog.objects.filter(created_at__lt=now - timedelta(days=30)).delete()
-    SystemState.objects.filter(pk=1).update(scheduler_heartbeat=timezone.now(), scheduler_completed_at=timezone.now())
+    _retry_locked_database(lambda: CheckResult.objects.filter(checked_at__lt=now - timedelta(days=30)).delete(), "deleting expired check results")
+    _retry_locked_database(lambda: RetailerRequestLog.objects.filter(created_at__lt=now - timedelta(days=30)).delete(), "deleting expired retailer request logs")
+    _retry_locked_database(
+        lambda: SystemState.objects.filter(pk=1).update(scheduler_heartbeat=timezone.now(), scheduler_completed_at=timezone.now()),
+        "recording scheduler completion",
+    )
 
 
 def check_product(product_id):
@@ -101,7 +119,7 @@ def check_product(product_id):
             monitor.availability = status
             monitor.last_checked_at = now
             monitor.last_error = message
-            monitor.next_check_at = now + timedelta(seconds=monitor.check_interval_seconds if success else min(monitor.check_interval_seconds * 5, RETRY_INTERVAL_SECONDS))
+            monitor.next_check_at = _next_check_at(monitor, now, success, status)
             if status == Product.Availability.AVAILABLE:
                 monitor.last_available_at = now
             if status == Product.Availability.UNAVAILABLE:
@@ -137,7 +155,7 @@ def check_monitor(monitor, product, source, now):
         monitor.availability = status
         monitor.last_checked_at = now
         monitor.last_error = message
-        monitor.next_check_at = now + timedelta(seconds=monitor.check_interval_seconds if snapshot else min(monitor.check_interval_seconds * 5, RETRY_INTERVAL_SECONDS))
+        monitor.next_check_at = _next_check_at(monitor, now, snapshot is not None, status)
         if status == Product.Availability.AVAILABLE:
             monitor.last_available_at = now
         if status == Product.Availability.UNAVAILABLE:

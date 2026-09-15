@@ -245,6 +245,21 @@ class AccountAndMonitorTests(TestCase):
         self.assertEqual(monitor.last_error, "Retailer availability is currently unavailable.")
         self.assertIsNotNone(monitor.last_checked_at)
 
+    def test_transient_monitor_failure_retries_after_two_check_intervals(self):
+        owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        product = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/example", title="Example")
+        webhook = DiscordWebhook.objects.create(owner=owner, name="Discord", encrypted_url=encrypt("https://discord.com/api/webhooks/1/token"))
+        monitor = Monitor.objects.create(owner=owner, product=product, webhook=webhook, check_interval_seconds=60)
+        source = Mock()
+        source.check.side_effect = AdapterError("Network error: ConnectionError")
+        checked_at = timezone.now()
+
+        check_monitor(monitor, product, source, checked_at)
+
+        monitor.refresh_from_db()
+        self.assertEqual(monitor.availability, Product.Availability.ERROR)
+        self.assertEqual(monitor.next_check_at, checked_at + timedelta(seconds=120))
+
     def test_due_product_failure_does_not_stop_later_checks(self):
         owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
         webhook = DiscordWebhook.objects.create(owner=owner, name="Discord", encrypted_url=encrypt("https://discord.com/api/webhooks/1/token"))
@@ -262,6 +277,21 @@ class AccountAndMonitorTests(TestCase):
         self.assertIsNotNone(state.scheduler_started_at)
         self.assertIsNotNone(state.scheduler_completed_at)
 
+    @override_settings(SCHEDULER_RUN_BUDGET_SECONDS=25)
+    def test_due_product_checks_stop_at_scheduler_pass_budget(self):
+        owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        webhook = DiscordWebhook.objects.create(owner=owner, name="Discord", encrypted_url=encrypt("https://discord.com/api/webhooks/1/token"))
+        first = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/first", title="First", next_check_at=timezone.now() - timedelta(minutes=1))
+        second = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/second", title="Second", next_check_at=timezone.now() - timedelta(minutes=1))
+        Monitor.objects.create(owner=owner, product=first, webhook=webhook)
+        Monitor.objects.create(owner=owner, product=second, webhook=webhook)
+
+        with patch("core.monitoring.check_product") as check_product, patch("core.monitoring.time.monotonic", side_effect=[100, 126]), self.assertLogs("core.monitoring", level="WARNING"):
+            check_due_products()
+
+        check_product.assert_not_called()
+        self.assertIsNotNone(SystemState.objects.get(pk=1).scheduler_completed_at)
+
     def test_scheduler_retries_a_locked_heartbeat_update(self):
         original = SystemState.objects.update_or_create
         attempts = 0
@@ -274,6 +304,23 @@ class AccountAndMonitorTests(TestCase):
             return original(*args, **kwargs)
 
         with patch.object(SystemState.objects, "update_or_create", side_effect=update_or_create), patch("core.monitoring.time.sleep") as sleep:
+            check_due_products()
+
+        self.assertEqual(sleep.call_count, 1)
+        self.assertIsNotNone(SystemState.objects.get(pk=1).scheduler_completed_at)
+
+    def test_scheduler_retries_a_locked_completion_update(self):
+        original = SystemState.objects.filter(pk=1).update
+        attempts = 0
+
+        def update(**kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise OperationalError("database is locked")
+            return original(**kwargs)
+
+        with patch("django.db.models.query.QuerySet.update", side_effect=update), patch("core.monitoring.time.sleep") as sleep:
             check_due_products()
 
         self.assertEqual(sleep.call_count, 1)
