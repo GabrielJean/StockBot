@@ -18,7 +18,7 @@ class Command(BaseCommand):
         scheduler = None
         if settings.SCHEDULER_ENABLED:
             scheduler = BackgroundScheduler(timezone=settings.TIME_ZONE)
-            scheduler.add_job(check_due_products, "interval", seconds=min(settings.MONITOR_INTERVAL_SECONDS, 30), id="stock-checks", max_instances=1, coalesce=True, next_run_time=timezone.now())
+            scheduler.add_job(check_due_products, "interval", seconds=min(settings.MONITOR_INTERVAL_SECONDS, 1), id="stock-checks", max_instances=1, coalesce=True, next_run_time=timezone.now())
             scheduler.start()
         command = ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "1", "--threads", "4", "--timeout", str(settings.GUNICORN_TIMEOUT_SECONDS), "--access-logfile", "-", "--error-logfile", "-"]
         process = subprocess.Popen(command)

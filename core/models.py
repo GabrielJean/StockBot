@@ -34,6 +34,7 @@ class User(AbstractUser):
     display_name = models.CharField(max_length=80, blank=True)
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
     approved_at = models.DateTimeField(null=True, blank=True)
+    fast_check_intervals_allowed = models.BooleanField(default=False)
     objects = UserManager()
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []

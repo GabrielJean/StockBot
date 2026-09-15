@@ -17,6 +17,7 @@ from .services import AdapterError, encrypt, get_adapter_for_url, masked_url, po
 
 
 CHECK_INTERVALS = {30, 60, 300, 900, 1800, 3600, 86400}
+FAST_CHECK_INTERVALS = {1, 15}
 IMPERSONATOR_SESSION_KEY = "stockbot_impersonator_id"
 
 
@@ -38,6 +39,13 @@ def error(message, status=400):
 
 def require_user(request):
     return request.user.is_authenticated and request.user.is_active and request.user.status == User.Status.APPROVED
+
+
+def valid_check_interval(user, interval):
+    return (
+        not isinstance(interval, bool)
+        and interval in CHECK_INTERVALS | (FAST_CHECK_INTERVALS if user.fast_check_intervals_allowed else set())
+    )
 
 
 def serialize_webhook(item):
@@ -93,7 +101,7 @@ def api_root(request):
 def current_user(request):
     if not request.user.is_authenticated:
         return None
-    data = {"id": request.user.id, "email": request.user.email, "displayName": request.user.display_name, "staff": request.user.is_staff, "status": request.user.status}
+    data = {"id": request.user.id, "email": request.user.email, "displayName": request.user.display_name, "staff": request.user.is_staff, "status": request.user.status, "fastCheckIntervalsAllowed": request.user.fast_check_intervals_allowed}
     impersonator_id = request.session.get(IMPERSONATOR_SESSION_KEY)
     if impersonator_id:
         impersonator = User.objects.filter(id=impersonator_id, is_staff=True, is_active=True).first()
@@ -234,7 +242,7 @@ def api_collection(request, resource):
             return error("This retailer URL is not supported yet.", 422)
         fulfillment = data.get("fulfillment", "shipping")
         check_interval_seconds = data.get("checkIntervalSeconds", 60)
-        if isinstance(check_interval_seconds, bool) or check_interval_seconds not in CHECK_INTERVALS:
+        if not valid_check_interval(request.user, check_interval_seconds):
             return error("Choose a valid check interval.")
         location_keys = [key.strip()[:64] for key in location_keys]
         external_id = external_id_value.strip().upper()
@@ -279,7 +287,7 @@ def api_collection(request, resource):
     if resource == "staff-users" and request.method == "GET":
         if not request.user.is_staff:
             return error("Staff access required.", 403)
-        return result({"users": [{"id": user.id, "email": user.email, "displayName": user.display_name, "status": user.status, "staff": user.is_staff, "joined": user.date_joined} for user in User.objects.order_by("status", "date_joined")]})
+        return result({"users": [{"id": user.id, "email": user.email, "displayName": user.display_name, "status": user.status, "staff": user.is_staff, "fastCheckIntervalsAllowed": user.fast_check_intervals_allowed, "joined": user.date_joined} for user in User.objects.order_by("status", "date_joined")]})
     if resource == "staff-monitors" and request.method == "GET":
         if not request.user.is_staff:
             return error("Staff access required.", 403)
@@ -314,7 +322,7 @@ def api_item(request, resource, object_id):
             item.active = bool(data["active"])
         if "checkIntervalSeconds" in data:
             interval = data["checkIntervalSeconds"]
-            if isinstance(interval, bool) or interval not in CHECK_INTERVALS:
+            if not valid_check_interval(request.user, interval):
                 return error("Choose a valid check interval.")
             item.check_interval_seconds = interval
             item.next_check_at = None
@@ -359,8 +367,19 @@ def api_item(request, resource, object_id):
             user.status, user.is_active, user.approved_at = User.Status.APPROVED, True, timezone.now()
         elif action == "reject":
             user.status, user.is_active = User.Status.REJECTED, False
+        elif action == "set-fast-check-intervals":
+            allowed = data.get("allowed")
+            if not isinstance(allowed, bool):
+                return error("Choose whether to allow fast check intervals.")
+            user.fast_check_intervals_allowed = allowed
+            if not allowed:
+                Monitor.objects.filter(owner=user, check_interval_seconds__in=FAST_CHECK_INTERVALS).update(
+                    check_interval_seconds=30,
+                    next_check_at=None,
+                    updated_at=timezone.now(),
+                )
         else:
             return error("Unsupported action.")
-        user.save(update_fields=["status", "is_active", "approved_at"])
+        user.save(update_fields=["status", "is_active", "approved_at", "fast_check_intervals_allowed"])
         return result({"ok": True})
     return error("Resource not found.", 404)

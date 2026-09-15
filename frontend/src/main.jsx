@@ -61,6 +61,14 @@ const CHECK_INTERVALS = [
   [3600, "Every 1 hour"],
   [86400, "Every 1 day"],
 ];
+const FAST_CHECK_INTERVALS = [
+  [1, "Every 1 second"],
+  [15, "Every 15 seconds"],
+];
+const checkIntervalsFor = (user) => [
+  ...(user.fastCheckIntervalsAllowed ? FAST_CHECK_INTERVALS : []),
+  ...CHECK_INTERVALS,
+];
 const RETAILER_NAMES = {
   nintendo_ca: "Nintendo Canada",
   bestbuy_ca: "Best Buy Canada",
@@ -200,7 +208,7 @@ function Auth({ onReady, appVersion }) {
   );
 }
 
-function AddMonitor({ webhooks, onCreated }) {
+function AddMonitor({ user, webhooks, onCreated }) {
   const [url, setUrl] = useState(""),
     [selectedStore, setSelectedStore] = useState(""),
     [applePartNumber, setApplePartNumber] = useState(""),
@@ -404,7 +412,7 @@ function AddMonitor({ webhooks, onCreated }) {
             value={checkIntervalSeconds}
             onChange={(e) => setCheckIntervalSeconds(Number(e.target.value))}
           >
-            {CHECK_INTERVALS.map(([seconds, label]) => (
+            {checkIntervalsFor(user).map(([seconds, label]) => (
               <option key={seconds} value={seconds}>{label}</option>
             ))}
           </select>
@@ -602,6 +610,7 @@ function Dashboard({ user, logout, onSessionExpired, appVersion, stopImpersonati
     [requestLogs, setRequestLogs] = useState([]),
     [requestLogRetailer, setRequestLogRetailer] = useState(""),
     [message, setMessage] = useState("");
+  const availableCheckIntervals = checkIntervalsFor(user);
   const loadGeneration = useRef(0);
   const loadController = useRef(null);
   const handleError = (error) => {
@@ -644,13 +653,14 @@ function Dashboard({ user, logout, onSessionExpired, appVersion, stopImpersonati
     }
   };
   useEffect(() => {
+    setView("monitors");
     load();
     const refresh = window.setInterval(load, 30_000);
     return () => {
       window.clearInterval(refresh);
       loadController.current?.abort();
     };
-  }, []);
+  }, [user.id]);
   const addWebhook = async (e) => {
     e.preventDefault();
     try {
@@ -684,11 +694,11 @@ function Dashboard({ user, logout, onSessionExpired, appVersion, stopImpersonati
       handleError(error);
     }
   };
-  const updateUser = async (id, action) => {
+  const updateUser = async (id, action, allowed) => {
     try {
       await request(`staff-users/${id}/`, {
         method: "PATCH",
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, ...(allowed === undefined ? {} : { allowed }) }),
       });
       loadUsers();
     } catch (error) {
@@ -779,7 +789,7 @@ function Dashboard({ user, logout, onSessionExpired, appVersion, stopImpersonati
                 Nintendo Canada shipping only.
               </p>
             </header>
-            <AddMonitor webhooks={webhooks} onCreated={load} />
+            <AddMonitor user={user} webhooks={webhooks} onCreated={load} />
             <section className="grid">
               {monitors.map((m) => (
                 <article className="monitor" key={m.id}>
@@ -816,7 +826,7 @@ function Dashboard({ user, logout, onSessionExpired, appVersion, stopImpersonati
                     <p className="meta">
                        Discord: {m.webhookName}
                        <br />
-                       Check interval: {CHECK_INTERVALS.find(([seconds]) => seconds === m.checkIntervalSeconds)?.[1] || "Every 1 minute"}
+                        Check interval: {availableCheckIntervals.find(([seconds]) => seconds === m.checkIntervalSeconds)?.[1] || "Every 1 minute"}
                        <br />
                        Checked: {formatTime(m.product.lastCheckedAt)}
                        <br />
@@ -831,7 +841,7 @@ function Dashboard({ user, logout, onSessionExpired, appVersion, stopImpersonati
                          value={m.checkIntervalSeconds}
                          onChange={(e) => updateMonitor(m.id, { checkIntervalSeconds: Number(e.target.value) })}
                        >
-                         {CHECK_INTERVALS.map(([seconds, label]) => (
+                          {availableCheckIntervals.map(([seconds, label]) => (
                            <option key={seconds} value={seconds}>{label}</option>
                          ))}
                        </select>
@@ -946,6 +956,7 @@ function Dashboard({ user, logout, onSessionExpired, appVersion, stopImpersonati
                     </>
                   )}
                   {person.status === "approved" && person.id !== user.id && <button onClick={() => impersonate(person.id)}>Impersonate</button>}
+                  {person.status === "approved" && <button onClick={() => updateUser(person.id, "set-fast-check-intervals", !person.fastCheckIntervalsAllowed)}>{person.fastCheckIntervalsAllowed ? "Disable fast timers" : "Allow fast timers"}</button>}
                   </div>
                 </article>
               ))}

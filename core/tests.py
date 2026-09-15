@@ -250,6 +250,46 @@ class AccountAndMonitorTests(TestCase):
         monitor.refresh_from_db()
         self.assertEqual(monitor.check_interval_seconds, 60)
 
+    def test_fast_monitor_intervals_require_user_permission(self):
+        owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        product = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/example", title="Example")
+        webhook = DiscordWebhook.objects.create(owner=owner, name="Discord", encrypted_url=encrypt("https://discord.com/api/webhooks/1/token"))
+        monitor = Monitor.objects.create(owner=owner, product=product, webhook=webhook)
+
+        self.client.force_login(owner)
+        denied = self.client.patch(f"/api/v1/monitors/{monitor.id}/", data={"checkIntervalSeconds": 1}, content_type="application/json")
+
+        self.assertEqual(denied.status_code, 400)
+        owner.fast_check_intervals_allowed = True
+        owner.save(update_fields=["fast_check_intervals_allowed"])
+        allowed = self.client.patch(f"/api/v1/monitors/{monitor.id}/", data={"checkIntervalSeconds": 1}, content_type="application/json")
+
+        monitor.refresh_from_db()
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(monitor.check_interval_seconds, 1)
+
+    def test_staff_can_grant_fast_timer_access(self):
+        staff = User.objects.create_user(email="staff@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True, is_staff=True)
+        member = User.objects.create_user(email="member@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        product = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/example", title="Example")
+        webhook = DiscordWebhook.objects.create(owner=member, name="Discord", encrypted_url=encrypt("https://discord.com/api/webhooks/1/token"))
+        monitor = Monitor.objects.create(owner=member, product=product, webhook=webhook, check_interval_seconds=15)
+
+        self.client.force_login(staff)
+        response = self.client.patch(f"/api/v1/staff-users/{member.id}/", data={"action": "set-fast-check-intervals", "allowed": True}, content_type="application/json")
+
+        member.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(member.fast_check_intervals_allowed)
+        users = self.client.get("/api/v1/staff-users/").json()["users"]
+        self.assertTrue(next(user for user in users if user["id"] == member.id)["fastCheckIntervalsAllowed"])
+
+        response = self.client.patch(f"/api/v1/staff-users/{member.id}/", data={"action": "set-fast-check-intervals", "allowed": False}, content_type="application/json")
+
+        monitor.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(monitor.check_interval_seconds, 30)
+
     def test_monitor_delivery_runs_after_transaction_commits(self):
         owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
         product = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/example", title="Example")
