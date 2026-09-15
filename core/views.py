@@ -17,6 +17,7 @@ from .services import AdapterError, encrypt, get_adapter_for_url, masked_url, po
 
 
 CHECK_INTERVALS = {30, 60, 300, 900, 1800, 3600, 86400}
+IMPERSONATOR_SESSION_KEY = "stockbot_impersonator_id"
 
 
 def payload(request):
@@ -92,7 +93,15 @@ def api_root(request):
 def current_user(request):
     if not request.user.is_authenticated:
         return None
-    return {"id": request.user.id, "email": request.user.email, "displayName": request.user.display_name, "staff": request.user.is_staff, "status": request.user.status}
+    data = {"id": request.user.id, "email": request.user.email, "displayName": request.user.display_name, "staff": request.user.is_staff, "status": request.user.status}
+    impersonator_id = request.session.get(IMPERSONATOR_SESSION_KEY)
+    if impersonator_id:
+        impersonator = User.objects.filter(id=impersonator_id, is_staff=True, is_active=True).first()
+        if impersonator:
+            data["impersonating"] = {"id": impersonator.id, "email": impersonator.email, "displayName": impersonator.display_name}
+        else:
+            request.session.pop(IMPERSONATOR_SESSION_KEY, None)
+    return data
 
 
 @require_http_methods(["GET", "POST"])
@@ -143,6 +152,29 @@ def api_collection(request, resource):
         return result({"user": current_user(request), "csrfToken": get_token(request)})
     if not require_user(request):
         return error("Authentication required.", 401)
+    if resource == "impersonation" and request.method == "POST":
+        action = data.get("action")
+        if action == "stop":
+            impersonator_id = request.session.get(IMPERSONATOR_SESSION_KEY)
+            impersonator = User.objects.filter(id=impersonator_id, is_staff=True, is_active=True).first()
+            if not impersonator:
+                return error("No active impersonation session exists.", 400)
+            login(request, impersonator)
+            request.session.pop(IMPERSONATOR_SESSION_KEY, None)
+            return result({"user": current_user(request), "csrfToken": get_token(request)})
+        if action == "start":
+            if IMPERSONATOR_SESSION_KEY in request.session or not request.user.is_staff:
+                return error("Staff access required.", 403)
+            target = User.objects.filter(id=data.get("userId"), is_active=True, status=User.Status.APPROVED).first()
+            if not target:
+                return error("Choose an approved user to impersonate.", 422)
+            if target.id == request.user.id:
+                return error("You are already signed in as this user.")
+            impersonator_id = request.user.id
+            login(request, target)
+            request.session[IMPERSONATOR_SESSION_KEY] = impersonator_id
+            return result({"user": current_user(request), "csrfToken": get_token(request)})
+        return error("Choose a valid impersonation action.")
     if resource == "stores" and request.method == "GET":
         return result({"stores": [{"key": "nintendo_ca", "name": "Nintendo Canada", "enabled": True, "description": "Shipping availability"}, {"key": "bestbuy_ca", "name": "Best Buy Canada", "enabled": True, "description": "Shipping and selected-store pickup"}, {"key": "apple_ca", "name": "Apple Canada", "enabled": True, "description": "Shipping and selected Apple Store pickup"}, {"key": "walmart_ca", "name": "Walmart Canada", "enabled": False}, {"key": "amazon_ca", "name": "Amazon Canada", "enabled": False}]})
     if resource in {"bestbuy-stores", "apple-stores"} and request.method == "POST":

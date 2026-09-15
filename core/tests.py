@@ -177,6 +177,36 @@ class AccountAndMonitorTests(TestCase):
         self.assertEqual(log["httpStatus"], 429)
         self.assertEqual(log["error"], "HTTPError")
 
+    def test_staff_can_impersonate_and_restore_an_approved_user(self):
+        staff = User.objects.create_user(email="staff@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True, is_staff=True)
+        member = User.objects.create_user(email="member@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        product = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/example", title="Example")
+        webhook = DiscordWebhook.objects.create(owner=member, name="Discord", encrypted_url=encrypt("https://discord.com/api/webhooks/1/token"))
+        Monitor.objects.create(owner=member, product=product, webhook=webhook)
+
+        self.client.force_login(staff)
+        response = self.client.post("/api/v1/impersonation/", data={"action": "start", "userId": member.id}, content_type="application/json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["user"]["id"], member.id)
+        self.assertEqual(response.json()["user"]["impersonating"]["id"], staff.id)
+        self.assertEqual(len(self.client.get("/api/v1/monitors/").json()["monitors"]), 1)
+
+        response = self.client.post("/api/v1/impersonation/", data={"action": "stop"}, content_type="application/json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["user"]["id"], staff.id)
+        self.assertNotIn("impersonating", response.json()["user"])
+
+    def test_non_staff_cannot_impersonate_users(self):
+        member = User.objects.create_user(email="member@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+        other = User.objects.create_user(email="other@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
+
+        self.client.force_login(member)
+        response = self.client.post("/api/v1/impersonation/", data={"action": "start", "userId": other.id}, content_type="application/json")
+
+        self.assertEqual(response.status_code, 403)
+
     def test_available_check_records_monitor_availability_time(self):
         owner = User.objects.create_user(email="owner@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True)
         product = Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/example", title="Example")

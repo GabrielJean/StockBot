@@ -592,7 +592,7 @@ function Status({ value }) {
   );
 }
 
-function Dashboard({ user, logout, onSessionExpired, appVersion }) {
+function Dashboard({ user, logout, onSessionExpired, appVersion, stopImpersonation, onImpersonated }) {
   const [monitors, setMonitors] = useState([]),
     [webhooks, setWebhooks] = useState([]),
     [view, setView] = useState("monitors"),
@@ -695,6 +695,18 @@ function Dashboard({ user, logout, onSessionExpired, appVersion }) {
       handleError(error);
     }
   };
+  const impersonate = async (id) => {
+    try {
+      const data = await request("impersonation/", {
+        method: "POST",
+        body: JSON.stringify({ action: "start", userId: id }),
+      });
+      csrf = data.csrfToken;
+      onImpersonated(data.user);
+    } catch (error) {
+      handleError(error);
+    }
+  };
   const updateAdminMonitor = async (id, active) => {
     try {
       await request(`staff-monitors/${id}/`, {
@@ -749,6 +761,7 @@ function Dashboard({ user, logout, onSessionExpired, appVersion }) {
         <div className="account">
           <strong>{user.displayName || user.email}</strong>
           <small>{user.staff ? "Administrator" : "Approved member"}</small>
+          {user.impersonating && <><small>Impersonating this account</small><button className="link" onClick={stopImpersonation}>Return to {user.impersonating.displayName || user.impersonating.email}</button></>}
           <button className="link" onClick={logout}>
             Sign out
           </button>
@@ -918,8 +931,9 @@ function Dashboard({ user, logout, onSessionExpired, appVersion }) {
                       {person.email} · {person.status}
                     </p>
                   </div>
+                  <div className="actions">
                   {person.status === "pending" && (
-                    <div className="actions">
+                    <>
                       <button onClick={() => updateUser(person.id, "approve")}>
                         Approve
                       </button>
@@ -929,8 +943,10 @@ function Dashboard({ user, logout, onSessionExpired, appVersion }) {
                       >
                         Reject
                       </button>
-                    </div>
+                    </>
                   )}
+                  {person.status === "approved" && person.id !== user.id && <button onClick={() => impersonate(person.id)}>Impersonate</button>}
+                  </div>
                 </article>
               ))}
             </section>
@@ -1039,6 +1055,17 @@ function App() {
         csrf = "";
         setUser(null);
       }}
+      stopImpersonation={async () => {
+        try {
+          const data = await request("impersonation/", { method: "POST", body: JSON.stringify({ action: "stop" }) });
+          csrf = data.csrfToken;
+          setUser(data.user);
+        } catch (error) {
+          csrf = "";
+          setUser(null);
+        }
+      }}
+      onImpersonated={setUser}
     />
   ) : (
     <Auth onReady={setUser} appVersion={appVersion} />
