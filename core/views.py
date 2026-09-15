@@ -86,7 +86,7 @@ def spa(request):
 
 @require_http_methods(["GET"])
 def api_root(request):
-    return result({"csrfToken": get_token(request), "user": current_user(request)})
+    return result({"csrfToken": get_token(request), "user": current_user(request), "appVersion": settings.APP_VERSION})
 
 
 def current_user(request):

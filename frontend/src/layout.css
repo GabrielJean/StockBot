@@ -28,6 +28,7 @@
 .monitor-top .status { white-space: nowrap; }
 .monitor-actions { flex: 0 0 100%; flex-wrap: wrap; justify-content: flex-start; }
 .section-title { margin: 2rem 0 .8rem; font-size: 1.15rem; }
+.app-version { margin: 2rem 0 0; color: #7891b6; font: 11px 'DM Mono', monospace; letter-spacing: .08em; }
 .store-list { display: grid; gap: .45rem; max-height: 18rem; overflow: auto; padding: .65rem; border: 1px solid #304766; border-radius: 8px; background: #0a1424; }
 .store-list label { display: flex !important; align-items: center; justify-content: flex-start !important; width: 100%; gap: .8rem; padding: .75rem .85rem; border: 1px solid #253d5d; border-radius: 7px; color: #d6e2f3; font-size: .86rem; text-align: left; cursor: pointer; }
 .store-list label:hover { border-color: #6b8ec4; background: #12213a; }

@@ -1,6 +1,7 @@
 from unittest.mock import Mock, patch
 from datetime import timedelta
 
+from django.conf import settings
 from django.test import Client, TestCase, override_settings
 from django.db import OperationalError, connection
 from django.utils import timezone
@@ -65,6 +66,12 @@ class AccountAndMonitorTests(TestCase):
             headers={"X-CSRFToken": login.json()["csrfToken"]},
         )
         self.assertEqual(webhook.status_code, 201)
+
+    def test_api_root_returns_current_app_version(self):
+        response = self.client.get("/api/v1/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["appVersion"], settings.APP_VERSION)
 
     @override_settings(WEBHOOK_ENCRYPTION_KEY="ordinary-deployment-secret")
     def test_webhook_encryption_accepts_regular_secret(self):

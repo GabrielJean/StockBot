@@ -34,6 +34,12 @@ The Docker build runs `npm ci` and builds the frontend. Rebuild the image after 
 
 Do not commit generated `core/static/`, `frontend/node_modules/`, SQLite databases, or runtime secrets.
 
+## Versioning
+
+- `VERSION` is the single source of truth for the user-visible StockBot version.
+- Every user-visible, behavioral, or deployment change must increment `VERSION` before completion. Use semantic versioning: patch for fixes, minor for backwards-compatible features, major for breaking changes.
+- Keep `VERSION` in the same change as its implementation and verify that `/api/v1/` returns the updated `appVersion`.
+
 ## Backend Conventions
 
 - Keep the backend dependency-light. Add a dependency only when the existing Django, standard-library, `requests`, BeautifulSoup, cryptography, or APScheduler tools cannot solve the problem cleanly.

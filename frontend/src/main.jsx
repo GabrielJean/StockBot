@@ -101,7 +101,7 @@ const APPLE_IPHONE_CONFIGURATIONS = [
   ["iPhone 18 Pro Max", "Black", "2 TB", "MJXJ4VC/A"],
 ];
 
-function Auth({ onReady }) {
+function Auth({ onReady, appVersion }) {
   const [mode, setMode] = useState("login"),
     [message, setMessage] = useState(""),
     [form, setForm] = useState({ email: "", password: "", displayName: "" });
@@ -194,6 +194,7 @@ function Auth({ onReady }) {
           The first registered account becomes the administrator. Later accounts
           require approval.
         </p>
+        <p className="app-version">StockBot v{appVersion}</p>
       </section>
     </main>
   );
@@ -591,7 +592,7 @@ function Status({ value }) {
   );
 }
 
-function Dashboard({ user, logout, onSessionExpired }) {
+function Dashboard({ user, logout, onSessionExpired, appVersion }) {
   const [monitors, setMonitors] = useState([]),
     [webhooks, setWebhooks] = useState([]),
     [view, setView] = useState("monitors"),
@@ -989,6 +990,7 @@ function Dashboard({ user, logout, onSessionExpired }) {
             </section>
           </>
         )}
+        <footer className="app-version">StockBot v{appVersion}</footer>
       </section>
     </main>
   );
@@ -997,7 +999,8 @@ function Dashboard({ user, logout, onSessionExpired }) {
 function App() {
   const [user, setUser] = useState(null),
     [ready, setReady] = useState(false),
-    [bootstrapError, setBootstrapError] = useState("");
+    [bootstrapError, setBootstrapError] = useState(""),
+    [appVersion, setAppVersion] = useState("");
   const bootstrap = async () => {
     setReady(false);
     setBootstrapError("");
@@ -1005,6 +1008,7 @@ function App() {
       const data = await request("");
       csrf = data.csrfToken;
       setUser(data.user);
+      setAppVersion(data.appVersion);
     } catch (error) {
       csrf = "";
       setBootstrapError(error.message || "Unable to connect to StockBot.");
@@ -1022,6 +1026,7 @@ function App() {
   return user ? (
     <Dashboard
       user={user}
+      appVersion={appVersion}
       logout={async () => {
         try {
           await request("logout/", { method: "POST" });
@@ -1036,7 +1041,7 @@ function App() {
       }}
     />
   ) : (
-    <Auth onReady={setUser} />
+    <Auth onReady={setUser} appVersion={appVersion} />
   );
 }
 createRoot(document.getElementById("root")).render(<App />);
