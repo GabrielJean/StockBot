@@ -466,7 +466,12 @@ def get_adapter_for_retailer(retailer):
 
 
 def post_discord(webhook, title, url, price="", test=False):
-    target = decrypt(webhook.encrypted_url)
+    try:
+        target = decrypt(webhook.encrypted_url)
+    except Exception as exc:
+        webhook.last_delivery_error = "DecryptionError"
+        webhook.save(update_fields=["last_delivery_error"])
+        return False, webhook.last_delivery_error
     description = "This is a StockBot delivery test." if test else "StockBot reports this item is available."
     payload = {"embeds": [{"title": title, "url": url, "description": description, "color": 3066993, "fields": ([{"name": "Price", "value": price, "inline": True}] if price else [])}]}
     try:

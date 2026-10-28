@@ -6,6 +6,9 @@ COPY frontend ./
 RUN npm run build
 
 FROM python:3.13-slim AS app
+ARG APP_VERSION=""
+LABEL org.opencontainers.image.version="${APP_VERSION}"
+LABEL version="${APP_VERSION}"
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DATABASE_PATH=/data/db.sqlite3 \

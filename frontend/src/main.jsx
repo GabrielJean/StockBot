@@ -614,7 +614,11 @@ function Dashboard({ user, logout, onSessionExpired, appVersion, stopImpersonati
     [adminMonitors, setAdminMonitors] = useState([]),
     [requestLogs, setRequestLogs] = useState([]),
     [requestLogRetailer, setRequestLogRetailer] = useState(""),
+    [dbExporting, setDbExporting] = useState(false),
+    [dbImporting, setDbImporting] = useState(false),
+    [importFile, setImportFile] = useState(null),
     [message, setMessage] = useState("");
+  const importFileRef = useRef(null);
   const availableCheckIntervals = checkIntervalsFor(user);
   const loadGeneration = useRef(0);
   const loadController = useRef(null);
@@ -740,6 +744,74 @@ function Dashboard({ user, logout, onSessionExpired, appVersion, stopImpersonati
       setAdminMonitors((current) => current.filter((monitor) => monitor.id !== id));
     } catch (error) {
       handleError(error);
+    }
+  };
+  const exportDatabase = async () => {
+    setDbExporting(true);
+    try {
+      const response = await fetch("/api/v1/staff-database/", {
+        credentials: "same-origin",
+      });
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `Export failed with status ${response.status}`);
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get("Content-Disposition");
+      let filename = "stockbot-backup.sqlite3";
+      if (disposition && disposition.includes("filename=")) {
+        const match = disposition.match(/filename=["']?([^"';]+)["']?/);
+        if (match && match[1]) {
+          filename = match[1].trim();
+        }
+      }
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (err) {
+      handleError(err);
+    } finally {
+      setDbExporting(false);
+    }
+  };
+  const importDatabase = async () => {
+    if (!importFile) return;
+    const confirmed = window.confirm(
+      "WARNING: Importing this database will completely overwrite all existing data (accounts, monitors, webhooks, and logs) on this instance with the imported database.\n\nAre you sure you want to proceed?"
+    );
+    if (!confirmed) return;
+
+    setDbImporting(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", importFile);
+      const response = await fetch("/api/v1/staff-database/", {
+        method: "POST",
+        headers: {
+          "X-CSRFToken": csrf,
+        },
+        credentials: "same-origin",
+        body: formData,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to import database.");
+      }
+      window.alert("Database imported successfully! The dashboard will now reload.");
+      window.location.reload();
+    } catch (err) {
+      handleError(err);
+    } finally {
+      setDbImporting(false);
+      setImportFile(null);
+      if (importFileRef.current) {
+        importFileRef.current.value = "";
+      }
     }
   };
   return (
@@ -1019,6 +1091,43 @@ function Dashboard({ user, logout, onSessionExpired, appVersion, stopImpersonati
                 </article>
               ))}
               {!requestLogs.filter((log) => !requestLogRetailer || log.retailer === requestLogRetailer).length && <article className="empty">No retained request logs for this store.</article>}
+            </section>
+            <h2 className="section-title">Database management</h2>
+            <section className="panel stack">
+              <div>
+                <p><strong>Export application database</strong></p>
+                <p className="fine">Download a full SQLite snapshot of the current database to your laptop.</p>
+                <button
+                  type="button"
+                  onClick={exportDatabase}
+                  disabled={dbExporting}
+                >
+                  {dbExporting ? "Exporting database..." : "Export database"}
+                </button>
+              </div>
+              <hr style={{ borderColor: "#203654", margin: "1rem 0" }} />
+              <div>
+                <p><strong>Restore database from backup</strong></p>
+                <p className="fine">
+                  Upload a previously exported StockBot SQLite database file. <strong>Warning:</strong> This will overwrite all existing data (accounts, monitors, webhooks, and logs) on this instance.
+                </p>
+                <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginTop: "0.5rem", flexWrap: "wrap" }}>
+                  <input
+                    type="file"
+                    ref={importFileRef}
+                    accept=".sqlite3,.db,application/vnd.sqlite3,application/x-sqlite3"
+                    onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                  />
+                  <button
+                    type="button"
+                    className="danger"
+                    disabled={!importFile || dbImporting}
+                    onClick={importDatabase}
+                  >
+                    {dbImporting ? "Importing database..." : "Import & overwrite database"}
+                  </button>
+                </div>
+              </div>
             </section>
           </>
         )}

@@ -1,12 +1,16 @@
 import json
+import os
 import re
+import sqlite3
+import tempfile
 from datetime import timedelta
 
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.password_validation import validate_password
 from django.conf import settings
-from django.db import IntegrityError, transaction
-from django.http import JsonResponse, HttpResponse
+from django.core.management import call_command
+from django.db import IntegrityError, OperationalError, connection, connections, transaction
+from django.http import FileResponse, HttpResponse, JsonResponse
 from django.middleware.csrf import get_token
 from django.shortcuts import render
 from django.utils import timezone
@@ -50,7 +54,11 @@ def valid_check_interval(user, interval):
 
 def serialize_webhook(item):
     from .services import decrypt
-    return {"id": item.id, "name": item.name, "url": masked_url(decrypt(item.encrypted_url)), "enabled": item.enabled, "lastDeliveryError": item.last_delivery_error, "lastTestedAt": item.last_tested_at}
+    try:
+        url = masked_url(decrypt(item.encrypted_url))
+    except Exception:
+        url = "https://discord.com/.../invalid-key"
+    return {"id": item.id, "name": item.name, "url": url, "enabled": item.enabled, "lastDeliveryError": item.last_delivery_error, "lastTestedAt": item.last_tested_at}
 
 
 def serialize_monitor(item):
@@ -112,8 +120,85 @@ def current_user(request):
     return data
 
 
+def staff_database(request):
+    if not require_user(request):
+        return error("Authentication required.", 401)
+    if not request.user.is_staff:
+        return error("Staff access required.", 403)
+    if request.method == "GET":
+        connection.ensure_connection()
+        tmp = tempfile.NamedTemporaryFile(suffix=".sqlite3")
+        dest = sqlite3.connect(tmp.name)
+        connection.connection.backup(dest)
+        dest.close()
+        tmp.seek(0)
+        timestamp = timezone.now().strftime("%Y%m%d-%H%M%S")
+        return FileResponse(
+            tmp,
+            as_attachment=True,
+            content_type="application/vnd.sqlite3",
+            filename=f"stockbot-backup-{timestamp}.sqlite3",
+        )
+    if request.method == "POST":
+        uploaded = request.FILES.get("file") or request.FILES.get("database")
+        tmp_in = tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False)
+        tmp_in_path = tmp_in.name
+        try:
+            if uploaded:
+                for chunk in uploaded.chunks():
+                    tmp_in.write(chunk)
+            elif request.body:
+                tmp_in.write(request.body)
+            else:
+                tmp_in.close()
+                return error("Upload a valid StockBot SQLite database file.")
+            tmp_in.close()
+
+            if os.path.getsize(tmp_in_path) == 0:
+                return error("Upload a valid StockBot SQLite database file.")
+            if os.path.getsize(tmp_in_path) > 500 * 1024 * 1024:
+                return error("Database file exceeds the 500 MB limit.")
+
+            try:
+                test_conn = sqlite3.connect(tmp_in_path)
+                cursor = test_conn.cursor()
+                cursor.execute("PRAGMA integrity_check;")
+                integrity = cursor.fetchone()
+                if not integrity or integrity[0] != "ok":
+                    test_conn.close()
+                    return error("Database integrity check failed.")
+
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+                tables = {row[0] for row in cursor.fetchall()}
+                required_tables = {"core_user", "core_monitor", "core_product", "core_systemstate"}
+                if not required_tables.issubset(tables):
+                    test_conn.close()
+                    return error("Uploaded file is not a valid StockBot database.")
+                test_conn.close()
+            except sqlite3.DatabaseError:
+                return error("Uploaded file is not a valid SQLite database.")
+
+            connections.close_all()
+            connection.connect()
+            src_conn = sqlite3.connect(tmp_in_path)
+            src_conn.backup(connection.connection)
+            src_conn.close()
+
+            call_command("migrate", interactive=False)
+            connections.close_all()
+        except Exception as exc:
+            return error(f"Database import failed: {exc}", 500)
+        finally:
+            if os.path.exists(tmp_in_path):
+                os.unlink(tmp_in_path)
+
+        return result({"ok": True, "message": "Database imported successfully."})
+
+
 @require_http_methods(["GET", "POST"])
 def api_collection(request, resource):
+    if resource == "staff-database":
+        return staff_database(request)
     data = payload(request)
     if data is None:
         return error("Request body must be a JSON object.")

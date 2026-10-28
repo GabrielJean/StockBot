@@ -1,8 +1,12 @@
+from io import BytesIO
+import os
+import sqlite3
+import tempfile
 from unittest.mock import Mock, patch
 from datetime import timedelta
 
 from django.conf import settings
-from django.test import Client, TestCase, override_settings
+from django.test import Client, TestCase, TransactionTestCase, override_settings
 from django.db import OperationalError, connection
 from django.utils import timezone
 
@@ -740,3 +744,106 @@ class AppleAdapterTests(TestCase):
             with self.assertRaisesRegex(AdapterError, "HTTP 403"):
                 AppleCanadaAdapter().validate("https://www.apple.com/ca/shop/", "A1A1A1", external_id="MG854VC/A")
         self.assertEqual(logs.output, ["WARNING:core.services:Apple access blocked: HTTP 403"])
+
+
+@override_settings(WEBHOOK_ENCRYPTION_KEY="HsdQznbn2wz1LikNoUvwzmgskkODlG5pgvAd1uKVXpQ=")
+class DatabaseExportImportTests(TransactionTestCase):
+    def test_anonymous_and_non_staff_cannot_export_or_import_database(self):
+        self.assertEqual(self.client.get("/api/v1/staff-database/").status_code, 401)
+        self.assertEqual(self.client.post("/api/v1/staff-database/").status_code, 401)
+
+        member = User.objects.create_user(email="member@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True, is_staff=False)
+        self.client.force_login(member)
+        self.assertEqual(self.client.get("/api/v1/staff-database/").status_code, 403)
+        self.assertEqual(self.client.post("/api/v1/staff-database/").status_code, 403)
+
+    def test_staff_can_export_database(self):
+        admin = User.objects.create_user(email="admin@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True, is_staff=True)
+        Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/switch-oled", title="Switch OLED")
+        self.client.force_login(admin)
+
+        response = self.client.get("/api/v1/staff-database/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/vnd.sqlite3")
+        self.assertIn("attachment; filename=", response["Content-Disposition"])
+        self.assertTrue(response["Content-Disposition"].endswith('.sqlite3"'))
+
+        content = b"".join(response.streaming_content) if response.streaming else response.content
+        with tempfile.NamedTemporaryFile(suffix=".sqlite3") as tmp:
+            tmp.write(content)
+            tmp.flush()
+            conn = sqlite3.connect(tmp.name)
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA integrity_check;")
+            self.assertEqual(cursor.fetchone()[0], "ok")
+            cursor.execute("SELECT email FROM core_user WHERE email='admin@example.com';")
+            self.assertEqual(cursor.fetchone()[0], "admin@example.com")
+            cursor.execute("SELECT title FROM core_product WHERE canonical_url='https://www.nintendo.com/en-ca/store/products/switch-oled';")
+            self.assertEqual(cursor.fetchone()[0], "Switch OLED")
+            conn.close()
+
+    def test_staff_can_import_database_overwriting_all_data(self):
+        admin = User.objects.create_user(email="old_admin@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True, is_staff=True)
+        Product.objects.create(canonical_url="https://www.nintendo.com/en-ca/store/products/old-item", title="Old Item")
+        self.client.force_login(admin)
+
+        export_resp = self.client.get("/api/v1/staff-database/")
+        export_bytes = b"".join(export_resp.streaming_content) if export_resp.streaming else export_resp.content
+
+        with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as import_tmp:
+            import_tmp.write(export_bytes)
+            import_tmp_path = import_tmp.name
+
+        try:
+            conn = sqlite3.connect(import_tmp_path)
+            conn.execute("DELETE FROM core_user;")
+            conn.execute("DELETE FROM core_product;")
+            conn.execute(
+                "INSERT INTO core_user (id, password, last_login, is_superuser, first_name, last_name, email, display_name, is_staff, is_active, date_joined, status, approved_at, fast_check_intervals_allowed) "
+                "VALUES (10, 'hashed_pass', NULL, 1, '', '', 'new_admin@example.com', 'New Admin', 1, 1, datetime('now'), 'approved', datetime('now'), 0);"
+            )
+            conn.execute(
+                "INSERT INTO core_product (id, canonical_url, retailer, external_id, title, image_url, price, availability, last_error, last_checked_at, last_success_at, next_check_at, updated_at) "
+                "VALUES (10, 'https://www.nintendo.com/en-ca/store/products/new-item', 'nintendo_ca', '', 'New Item', '', '$100', 'available', '', datetime('now'), datetime('now'), NULL, datetime('now'));"
+            )
+            conn.commit()
+            conn.close()
+
+            with open(import_tmp_path, "rb") as upload_file:
+                response = self.client.post("/api/v1/staff-database/", {"file": upload_file})
+
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.json()["ok"])
+
+            self.assertFalse(User.objects.filter(email="old_admin@example.com").exists())
+            self.assertFalse(Product.objects.filter(title="Old Item").exists())
+            self.assertTrue(User.objects.filter(email="new_admin@example.com").exists())
+            self.assertTrue(Product.objects.filter(title="New Item").exists())
+        finally:
+            if os.path.exists(import_tmp_path):
+                os.unlink(import_tmp_path)
+
+    def test_import_rejects_corrupted_or_non_stockbot_database(self):
+        admin = User.objects.create_user(email="admin@example.com", password="A-secure-passphrase-123", status=User.Status.APPROVED, is_active=True, is_staff=True)
+        self.client.force_login(admin)
+
+        fake_file = BytesIO(b"This is not a sqlite database.")
+        fake_file.name = "fake.sqlite3"
+        response = self.client.post("/api/v1/staff-database/", {"file": fake_file})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("error", response.json())
+
+        with tempfile.NamedTemporaryFile(suffix=".sqlite3") as tmp:
+            conn = sqlite3.connect(tmp.name)
+            conn.execute("CREATE TABLE unrelated (id INT);")
+            conn.commit()
+            conn.close()
+            with open(tmp.name, "rb") as empty_db:
+                response = self.client.post("/api/v1/staff-database/", {"file": empty_db})
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.json()["error"], "Uploaded file is not a valid StockBot database.")
+
+        empty_file = BytesIO(b"")
+        empty_file.name = "empty.sqlite3"
+        response = self.client.post("/api/v1/staff-database/", {"file": empty_file})
+        self.assertEqual(response.status_code, 400)
