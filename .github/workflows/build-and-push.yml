@@ -46,8 +46,8 @@ jobs:
             APP_GITHUB_DEFAULT_BRANCH=main
             APP_VERSION=${{ env.APP_VERSION }}
           tags: |
-            ${{ env.GHCR_IMAGE_NAME }}:${{ github.sha }}
             ${{ env.GHCR_IMAGE_NAME }}:${{ env.APP_VERSION }}
+            ${{ env.GHCR_IMAGE_NAME }}:latest
           labels: |
             org.opencontainers.image.version=${{ env.APP_VERSION }}
             version=${{ env.APP_VERSION }}
