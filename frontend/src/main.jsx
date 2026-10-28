@@ -1038,6 +1038,43 @@ function Dashboard({ user, logout, onSessionExpired, appVersion, stopImpersonati
                 </article>
               ))}
             </section>
+            <h2 className="section-title">Database management</h2>
+            <section className="panel stack">
+              <div>
+                <p><strong>Export application database</strong></p>
+                <p className="fine">Download a full SQLite snapshot of the current database to your laptop.</p>
+                <button
+                  type="button"
+                  onClick={exportDatabase}
+                  disabled={dbExporting}
+                >
+                  {dbExporting ? "Exporting database..." : "Export database"}
+                </button>
+              </div>
+              <hr style={{ borderColor: "#203654", margin: "1rem 0" }} />
+              <div>
+                <p><strong>Restore database from backup</strong></p>
+                <p className="fine">
+                  Upload a previously exported StockBot SQLite database file. <strong>Warning:</strong> This will overwrite all existing data (accounts, monitors, webhooks, and logs) on this instance.
+                </p>
+                <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginTop: "0.5rem", flexWrap: "wrap" }}>
+                  <input
+                    type="file"
+                    ref={importFileRef}
+                    accept=".sqlite3,.db,application/vnd.sqlite3,application/x-sqlite3"
+                    onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                  />
+                  <button
+                    type="button"
+                    className="danger"
+                    disabled={!importFile || dbImporting}
+                    onClick={importDatabase}
+                  >
+                    {dbImporting ? "Importing database..." : "Import & overwrite database"}
+                  </button>
+                </div>
+              </div>
+            </section>
             <h2 className="section-title">All monitors</h2>
             <section className="list">
               {adminMonitors.map((monitor) => (
@@ -1091,43 +1128,6 @@ function Dashboard({ user, logout, onSessionExpired, appVersion, stopImpersonati
                 </article>
               ))}
               {!requestLogs.filter((log) => !requestLogRetailer || log.retailer === requestLogRetailer).length && <article className="empty">No retained request logs for this store.</article>}
-            </section>
-            <h2 className="section-title">Database management</h2>
-            <section className="panel stack">
-              <div>
-                <p><strong>Export application database</strong></p>
-                <p className="fine">Download a full SQLite snapshot of the current database to your laptop.</p>
-                <button
-                  type="button"
-                  onClick={exportDatabase}
-                  disabled={dbExporting}
-                >
-                  {dbExporting ? "Exporting database..." : "Export database"}
-                </button>
-              </div>
-              <hr style={{ borderColor: "#203654", margin: "1rem 0" }} />
-              <div>
-                <p><strong>Restore database from backup</strong></p>
-                <p className="fine">
-                  Upload a previously exported StockBot SQLite database file. <strong>Warning:</strong> This will overwrite all existing data (accounts, monitors, webhooks, and logs) on this instance.
-                </p>
-                <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginTop: "0.5rem", flexWrap: "wrap" }}>
-                  <input
-                    type="file"
-                    ref={importFileRef}
-                    accept=".sqlite3,.db,application/vnd.sqlite3,application/x-sqlite3"
-                    onChange={(e) => setImportFile(e.target.files?.[0] || null)}
-                  />
-                  <button
-                    type="button"
-                    className="danger"
-                    disabled={!importFile || dbImporting}
-                    onClick={importDatabase}
-                  >
-                    {dbImporting ? "Importing database..." : "Import & overwrite database"}
-                  </button>
-                </div>
-              </div>
             </section>
           </>
         )}
