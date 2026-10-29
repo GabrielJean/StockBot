@@ -14,7 +14,7 @@ Key directories:
 
 ## Development Commands
 
-Use Docker for all application builds, runtime debugging, and verification. The Docker image defines the supported Python 3.13 and Node 22 environment; do not rely on host-installed language runtimes for project work.
+Use Docker for all application builds, runtime debugging, and verification. The Docker image defines the supported Python 3.13 and Node 26 environment; do not rely on host-installed language runtimes for project work.
 
 Build and run the production-equivalent service locally with Docker:
 
